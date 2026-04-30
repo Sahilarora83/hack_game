@@ -57,6 +57,39 @@
         font-weight: 700;
       }
 
+      .reason {
+        margin-top: 8px;
+        color: #5d6678;
+        font-size: 14px;
+        line-height: 1.4;
+      }
+
+      .results {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 8px;
+      }
+
+      .result-pill {
+        min-width: 42px;
+        border-radius: 6px;
+        padding: 8px 10px;
+        background: #eef2f8;
+        text-align: center;
+        font-weight: 700;
+      }
+
+      .result-pill.big {
+        background: #e8f1ff;
+        color: #174ea6;
+      }
+
+      .result-pill.small {
+        background: #fff1e8;
+        color: #a64200;
+      }
+
       pre {
         overflow: auto;
         white-space: pre-wrap;
@@ -105,6 +138,16 @@
           <div class="label">Records</div>
           <div id="records" class="value">-</div>
         </article>
+        <article class="card">
+          <div class="label">Confidence</div>
+          <div id="confidence" class="value">-</div>
+          <div id="reason" class="reason">-</div>
+        </article>
+      </section>
+
+      <section class="card" style="margin-top: 14px">
+        <div class="label">Last 10 Results</div>
+        <div id="lastResults" class="results"></div>
       </section>
 
       <section class="card" style="margin-top: 14px">
@@ -251,31 +294,74 @@
         const transition = analysis.transitions.probabilities;
         const streak = analysis.streaks.sizeStreak;
 
-        let bigScore = recentBigSmall.ratio.Big;
-        let smallScore = recentBigSmall.ratio.Small;
+        let bigScore = recentBigSmall.ratio.Big * 0.45;
+        let smallScore = recentBigSmall.ratio.Small * 0.45;
+        const reasons = [];
 
         if (latestSize === "Big") {
-          bigScore += transition["Big->Big"];
-          smallScore += transition["Big->Small"];
+          bigScore += transition["Big->Big"] * 0.35;
+          smallScore += transition["Big->Small"] * 0.35;
         } else {
-          bigScore += transition["Small->Big"];
-          smallScore += transition["Small->Small"];
+          bigScore += transition["Small->Big"] * 0.35;
+          smallScore += transition["Small->Small"] * 0.35;
         }
 
-        if (streak?.length >= 3) {
-          if (streak.value === "Big") smallScore += 0.35;
-          if (streak.value === "Small") bigScore += 0.35;
+        if (records.length < 30) {
+          reasons.push("Only latest 10 public records are available, so confidence stays low.");
+        }
+
+        if (streak?.length >= 4) {
+          if (streak.value === "Big") {
+            smallScore += 0.65;
+            reasons.push(`Long Big streak x${streak.length}; leaning streak break.`);
+          }
+          if (streak.value === "Small") {
+            bigScore += 0.65;
+            reasons.push(`Long Small streak x${streak.length}; leaning streak break.`);
+          }
+        } else if (streak?.length === 3) {
+          if (streak.value === "Big") {
+            smallScore += 0.35;
+            reasons.push("Big streak x3; slight break signal.");
+          }
+          if (streak.value === "Small") {
+            bigScore += 0.35;
+            reasons.push("Small streak x3; slight break signal.");
+          }
+        } else if (streak?.length === 2) {
+          if (streak.value === "Big") {
+            bigScore += 0.15;
+            reasons.push("Short Big trend x2; slight follow signal.");
+          }
+          if (streak.value === "Small") {
+            smallScore += 0.15;
+            reasons.push("Short Small trend x2; slight follow signal.");
+          }
         }
 
         const predictedRange = bigScore >= smallScore ? "Big" : "Small";
+        const scoreGap = Math.abs(bigScore - smallScore);
+        const confidence = records.length < 30
+          ? "Low"
+          : scoreGap >= 0.45
+            ? "High"
+            : scoreGap >= 0.22
+              ? "Medium"
+              : "Low";
         const rangeNumbers = predictedRange === "Big" ? [5, 6, 7, 8, 9] : [0, 1, 2, 3, 4];
+        const recentMissingBonus = new Map(
+          rangeNumbers.map((number) => [
+            number,
+            recent10.some((record) => record.number === number) ? 0 : 1.25,
+          ])
+        );
         const topNumbers = rangeNumbers
           .map((number) => ({
             number,
             score:
               (recentFrequency[number] || 0) * 2 +
               (analysis.frequency[number] || 0) / Math.max(records.length, 1) +
-              (recent10.some((record) => record.number === number) ? 0.25 : 0),
+              recentMissingBonus.get(number),
           }))
           .sort((a, b) => b.score - a.score)
           .slice(0, 2)
@@ -285,6 +371,14 @@
           predictedRange,
           rangeLabel: predictedRange === "Big" ? "5-9" : "0-4",
           topNumbers,
+          confidence,
+          reason: reasons.join(" ") || "Balanced recent frequency and Big/Small transitions.",
+          recentResults: recent10.map((record) => ({
+            issueNumber: record.issueNumber,
+            number: record.number,
+            size: sizeOf(record.number),
+            color: record.color,
+          })),
           scores: {
             Big: Number(bigScore.toFixed(3)),
             Small: Number(smallScore.toFixed(3)),
@@ -343,6 +437,15 @@
           data.prediction.topNumbers.join(", ");
         document.querySelector("#issue").textContent = data.latestIssue;
         document.querySelector("#records").textContent = data.analysis.totalRecords;
+        document.querySelector("#confidence").textContent = data.prediction.confidence || "-";
+        document.querySelector("#reason").textContent = data.prediction.reason || "-";
+        document.querySelector("#lastResults").innerHTML = (data.prediction.recentResults || [])
+          .map((result) => (
+            `<div class="result-pill ${result.size.toLowerCase()}" title="${result.issueNumber}">
+              ${result.number}<br><small>${result.size[0]}</small>
+            </div>`
+          ))
+          .join("");
         document.querySelector("#analysis").textContent = JSON.stringify(data, null, 2);
         statusEl.textContent = data.warning && data.source !== "browser-live"
           ? `Sample data: ${data.warning}`
