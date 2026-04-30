@@ -188,6 +188,11 @@
           <div id="reason" class="reason">-</div>
         </article>
         <article class="card">
+          <div class="label">Action</div>
+          <div id="action" class="value">-</div>
+          <div id="actionReason" class="reason">Waiting for signals...</div>
+        </article>
+        <article class="card">
           <div class="label">Groq AI Prediction</div>
           <div id="aiPrediction" class="value">-</div>
           <div id="aiReason" class="reason">Groq optimized: cache + throttling enabled.</div>
@@ -214,6 +219,7 @@
                 <th>Issue</th>
                 <th>Predicted</th>
                 <th>Actual</th>
+                <th>Action</th>
                 <th>Range</th>
                 <th>Number</th>
               </tr>
@@ -328,6 +334,7 @@
         if (!prediction?.predictedRange || !Number.isInteger(Number(prediction.predictedNumber))) {
           return;
         }
+        if (prediction.action === "SKIP") return;
 
         const history = loadPredictionHistory();
         const existingIndex = history.findIndex((entry) => entry.issueNumber === issueNumber);
@@ -337,6 +344,7 @@
           predictedNumber: Number(prediction.predictedNumber),
           topNumbers: Array.isArray(prediction.topNumbers) ? prediction.topNumbers.slice(0, 2) : [],
           confidence: prediction.confidence || "Low",
+          action: prediction.action || "TRACK",
           source: source || "local",
           createdAt: new Date().toISOString(),
           status: "pending",
@@ -372,7 +380,7 @@
       }
 
       function renderPredictionHistory(history = loadPredictionHistory()) {
-        const graded = history.filter((entry) => entry.status === "graded");
+        const graded = history.filter((entry) => entry.status === "graded" && entry.action !== "SKIP");
         const total = graded.length;
         const rangeCorrect = graded.filter((entry) => entry.rangeCorrect).length;
         const numberCorrect = graded.filter((entry) => entry.numberCorrect).length;
@@ -402,6 +410,7 @@
                 <td>${entry.issueNumber}</td>
                 <td>${entry.predictedNumber} ${entry.predictedRange}</td>
                 <td>${actual}</td>
+                <td>${entry.action || "TRACK"}</td>
                 <td>${rangeMark}</td>
                 <td>${numberMark}</td>
               </tr>
@@ -422,6 +431,32 @@
         const enoughTimePassed = Date.now() - lastAiCallAt >= aiMinIntervalMs;
 
         return enoughTimePassed && (isStrongStreak || isWeakLocal || recentRangeAccuracy < 0.55);
+      }
+
+      function decideAction(prediction) {
+        const reason = String(prediction?.reason || "").toLowerCase();
+        const conflict = reason.includes("conflict") || reason.includes("weak");
+
+        if (prediction?.confidence === "Low" || conflict) {
+          return {
+            action: "SKIP",
+            reason: conflict
+              ? "Signals conflict/weak hain, is round ko skip karo."
+              : "Confidence low hai, is round ko skip karo.",
+          };
+        }
+
+        if (prediction?.confidence === "High") {
+          return {
+            action: "STRONG",
+            reason: "Confidence high hai, signal stronger hai.",
+          };
+        }
+
+        return {
+          action: "WATCH",
+          reason: "Medium confidence hai, carefully observe karo.",
+        };
       }
 
       function sizeOf(number) {
@@ -729,6 +764,8 @@
 
       function applyPrimaryPrediction(prediction, source, reason) {
         const sourceLabel = source === "groq" ? "Groq AI" : "Local fallback";
+        const decision = decideAction({ ...prediction, reason });
+        prediction.action = decision.action;
 
         document.querySelector("#aiPrediction").textContent =
           prediction.predictedRange && prediction.rangeLabel
@@ -754,12 +791,16 @@
         if (prediction.confidence) {
           document.querySelector("#confidence").textContent = prediction.confidence;
         }
+        document.querySelector("#action").textContent = decision.action;
+        document.querySelector("#actionReason").textContent = decision.reason;
         if (reason) {
           document.querySelector("#reason").textContent = `${sourceLabel}: ${reason}`;
         }
       }
 
       function renderData(data) {
+        const localDecision = decideAction(data.prediction);
+        data.prediction.action = localDecision.action;
         document.querySelector("#prediction").textContent =
           `${data.prediction.predictedRange} (${data.prediction.rangeLabel})`;
         document.querySelector("#predictionSource").textContent =
@@ -778,6 +819,8 @@
         document.querySelector("#records").textContent = data.analysis.totalRecords;
         document.querySelector("#confidence").textContent = data.prediction.confidence || "-";
         document.querySelector("#reason").textContent = data.prediction.reason || "-";
+        document.querySelector("#action").textContent = localDecision.action;
+        document.querySelector("#actionReason").textContent = localDecision.reason;
         document.querySelector("#lastResults").innerHTML = (data.prediction.recentResults || [])
           .map((result) => (
             `<div class="result-pill ${result.size.toLowerCase()}" title="${result.issueNumber}">
