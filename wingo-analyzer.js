@@ -22,6 +22,7 @@ const axios = require("axios");
 const API_URL =
   process.env.WINGO_API_URL ||
   "https://api.jaiclubapi.com/WinGo/WinGo_30S/GetHistoryIssuePage.json";
+const API_REFERER = process.env.WINGO_API_REFERER || "https://www.jaiclub48.com/";
 const STORE_FILE = path.join(__dirname, "wingo-history.json");
 const POLL_MS = Number(process.env.WINGO_POLL_MS || 30_000);
 const TARGET_RECORDS = Number(process.env.WINGO_TARGET_RECORDS || 500);
@@ -61,6 +62,14 @@ function extractRecords(payload) {
 async function fetchHistoryPage(pageNo = 1, pageSize = 10) {
   const response = await axios.get(API_URL, {
     timeout: 15_000,
+    headers: {
+      Accept: "application/json, text/plain, */*",
+      Origin: new URL(API_REFERER).origin,
+      Referer: API_REFERER,
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+        "(KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+    },
     params: {
       pageNo,
       pageSize,

@@ -35,3 +35,9 @@ API:
 ```
 
 If the dashboard shows sample data, set `WINGO_API_URL` in Vercel to the working public history JSON endpoint. The default endpoint can fail with `404` if the provider changes paths or blocks that route.
+
+For JaiClub-style public draw endpoints, this value can be used:
+
+```text
+WINGO_API_URL=https://draw.ar-lottery01.com/WinGo/WinGo_30S/GetHistoryIssuePage.json
+```
