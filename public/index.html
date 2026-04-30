@@ -112,6 +112,16 @@
         cursor: wait;
         opacity: 0.7;
       }
+
+      .live-dot {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        margin-left: 8px;
+        border-radius: 999px;
+        background: #16a34a;
+        box-shadow: 0 0 0 4px rgba(22, 163, 74, 0.14);
+      }
     </style>
   </head>
   <body>
@@ -119,7 +129,7 @@
       <h1>WinGo Analyzer</h1>
       <p class="muted">Public API data se statistical analysis. Prediction guaranteed nahi hai.</p>
       <button id="refresh">Refresh</button>
-      <span id="status" class="muted">Loading...</span>
+      <span id="status" class="muted">Loading...</span><span class="live-dot"></span>
 
       <section class="grid">
         <article class="card">
@@ -163,6 +173,7 @@
         "https://draw.ar-lottery01.com/WinGo/WinGo_30S/GetHistoryIssuePage.json";
       const targetRecords = 500;
       const recentWindow = 20;
+      const pollMs = 3_000;
 
       function normalizeRecord(raw) {
         const number = Number(raw.number);
@@ -453,10 +464,14 @@
       }
 
       async function loadPrediction() {
+        if (refreshButton.disabled) return;
         refreshButton.disabled = true;
         statusEl.textContent = "Updating...";
 
         try {
+          renderData(await loadBrowserLiveData());
+        } catch (browserError) {
+          try {
           const response = await fetch("/api/prediction");
           const data = await response.json();
 
@@ -464,16 +479,9 @@
             throw new Error(data.error || "Request failed");
           }
 
-          if (data.source === "sample" && data.warning?.includes("403")) {
-            renderData(await loadBrowserLiveData());
-          } else {
             renderData(data);
-          }
-        } catch (error) {
-          try {
-            renderData(await loadBrowserLiveData());
-          } catch {
-            statusEl.textContent = error.message;
+          } catch (serverError) {
+            statusEl.textContent = browserError.message || serverError.message;
           }
         } finally {
           refreshButton.disabled = false;
@@ -482,7 +490,7 @@
 
       refreshButton.addEventListener("click", loadPrediction);
       loadPrediction();
-      setInterval(loadPrediction, 30_000);
+      setInterval(loadPrediction, pollMs);
     </script>
   </body>
 </html>
