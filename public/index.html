@@ -307,7 +307,7 @@
         "https://draw.ar-lottery01.com/WinGo/WinGo_30S/GetHistoryIssuePage.json";
       const targetRecords = 500;
       const recentWindow = 20;
-      const pollMs = 3_000;
+      const pollMs = 1_000;
       const storageKey = "wingo-browser-history-v1";
       const predictionStorageKey = "wingo-prediction-history-v1";
       const aiMinIntervalMs = 30_000;
@@ -376,7 +376,7 @@
       }
 
       function validTrackedHistory(history = loadPredictionHistory()) {
-        return history.filter((entry) => entry.source === "groq" && entry.action !== "SKIP");
+        return history.filter((entry) => ["fast", "groq"].includes(entry.source) && entry.action !== "SKIP");
       }
 
       function chunkArray(items, size) {
@@ -410,7 +410,7 @@
         if (!prediction?.predictedRange || !Number.isInteger(Number(prediction.predictedNumber))) {
           return;
         }
-        if (source !== "groq") return;
+        if (!["fast", "groq"].includes(source)) return;
         if (prediction.action === "SKIP") return;
 
         const history = loadPredictionHistory();
@@ -422,7 +422,7 @@
           topNumbers: Array.isArray(prediction.topNumbers) ? prediction.topNumbers.slice(0, 2) : [],
           confidence: prediction.confidence || "Low",
           action: prediction.action || "TRACK",
-          source: source || "local",
+          source,
           reason: prediction.reason || null,
           createdAt: new Date().toISOString(),
           status: "pending",
@@ -468,8 +468,8 @@
           ? `${Math.round((rangeCorrect / total) * 100)}% range`
           : "Waiting...";
         document.querySelector("#accuracyDetail").textContent = total
-          ? `Checked ${total} Groq predictions. Exact number accuracy: ${Math.round((numberCorrect / total) * 100)}%.`
-          : "Groq prediction ka next result aate hi auto-check hoga.";
+          ? `Checked ${total} fast/Groq predictions. Exact number accuracy: ${Math.round((numberCorrect / total) * 100)}%.`
+          : "Next result aate hi prediction auto-check hogi.";
 
         document.querySelector("#predictionHistory").innerHTML = tracked
           .slice(0, 12)
@@ -507,7 +507,7 @@
           topNumbers: entry.topNumbers,
           confidence: entry.confidence,
           action: entry.action || "TRACK",
-          source: entry.source || "local",
+          source: entry.source || "fast",
           reason: entry.reason || null,
           rawResponse: entry,
         }));
@@ -591,7 +591,7 @@
 
         if (data.latestIssue !== lastSupabaseIssue) {
           lastSupabaseIssue = data.latestIssue;
-          await syncSupabase(records, data.prediction, "local", { force: true });
+          await syncSupabase(records, data.prediction, "fast", { force: true });
         }
 
         if (Date.now() - lastBulkSyncAt >= bulkSyncIntervalMs) {
@@ -889,8 +889,11 @@
 
       async function fetchBrowserDataset() {
         let records = loadStoredRecords();
+        const latestPage = await fetchHistoryPage(1, 50);
+        records = mergeRecords(records, latestPage);
 
         for (let pageNo = 1; records.length < targetRecords; pageNo += 1) {
+          if (pageNo === 1) continue;
           const page = await fetchHistoryPage(pageNo, 50);
           if (page.length === 0) break;
 
@@ -1055,7 +1058,7 @@
           : `Updated ${new Date(data.updatedAt).toLocaleTimeString()} (${data.source})`;
 
         gradePredictionHistory(data.records || []);
-        rememberPrediction(data.latestIssue, data.prediction, "local");
+        rememberPrediction(data.latestIssue, data.prediction, "fast");
         syncRealtimeToSupabase(data);
         loadAiPrediction(data.records || data.prediction.recentResults);
       }
