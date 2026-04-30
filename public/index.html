@@ -815,8 +815,8 @@
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              records: records.slice(0, 500),
-              predictionHistory: loadPredictionHistory().slice(0, 120),
+              records: records.slice(0, 120),
+              predictionHistory: loadPredictionHistory().slice(0, 40),
             }),
           });
           const data = await response.json();

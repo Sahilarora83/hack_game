@@ -68,8 +68,16 @@ function fallbackPrediction(records) {
 function buildSummary(records) {
   const recent10 = records.slice(0, 10);
   const recent20 = records.slice(0, 20);
+  const recent50 = records.slice(0, 50);
+  const allFrequency = Object.fromEntries([...Array(10).keys()].map((number) => [number, 0]));
   const frequency = Object.fromEntries([...Array(10).keys()].map((number) => [number, 0]));
   const sizeCounts = { Big: 0, Small: 0 };
+  const allSizeCounts = { Big: 0, Small: 0 };
+
+  records.forEach((record) => {
+    allFrequency[record.number] += 1;
+    allSizeCounts[record.size] += 1;
+  });
 
   recent20.forEach((record) => {
     frequency[record.number] += 1;
@@ -88,11 +96,26 @@ function buildSummary(records) {
     latestNumber: records[0]?.number,
     latestSize,
     recent10: recent10.map((record) => `${record.number}-${record.size[0]}`),
+    recent50Sequence: recent50.map((record) => record.number).join(""),
     recent20Frequency: frequency,
     recent20SizeCounts: sizeCounts,
+    allFrequency,
+    allSizeCounts,
     currentSizeStreak: latestSize ? `${latestSize} x${sizeStreak}` : "none",
     totalRecordsProvided: records.length,
   };
+}
+
+function compactHistory(history) {
+  return history
+    .slice(0, 30)
+    .map((entry) => ({
+      i: entry.issueNumber.slice(-4),
+      p: `${entry.predictedNumber}${entry.predictedRange[0]}`,
+      a: Number.isInteger(entry.actualNumber) ? `${entry.actualNumber}${String(entry.actualRange || "")[0]}` : "-",
+      ok: entry.status === "graded" ? `${entry.rangeCorrect ? "R1" : "R0"}${entry.numberCorrect ? "N1" : "N0"}` : "pending",
+      act: entry.action || "TRACK",
+    }));
 }
 
 function buildAccuracyFeedback(history) {
@@ -157,6 +180,7 @@ module.exports = async function handler(req, res) {
     const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
     const summary = buildSummary(records);
     const accuracyFeedback = buildAccuracyFeedback(predictionHistory);
+    const compactPredictionHistory = compactHistory(predictionHistory);
     const completion = await groq.chat.completions.create({
       model: MODEL,
       messages: [
@@ -185,14 +209,12 @@ module.exports = async function handler(req, res) {
             JSON.stringify(summary) +
             "\n\nAccuracyFeedback:\n" +
             JSON.stringify(accuracyFeedback) +
-            "\n\nRecentPredictionHistory:\n" +
-            JSON.stringify(predictionHistory.slice(0, 60)) +
-            "\n\nRecords:\n" +
-            JSON.stringify(records),
+            "\n\nRecentPredictionHistoryCompact:\n" +
+            JSON.stringify(compactPredictionHistory),
         },
       ],
       temperature: 0.2,
-      max_completion_tokens: 700,
+      max_completion_tokens: 350,
       top_p: 1,
       response_format: { type: "json_object" },
     });
