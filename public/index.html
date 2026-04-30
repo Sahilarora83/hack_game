@@ -153,6 +153,11 @@
           <div id="confidence" class="value">-</div>
           <div id="reason" class="reason">-</div>
         </article>
+        <article class="card">
+          <div class="label">Groq AI Prediction</div>
+          <div id="aiPrediction" class="value">-</div>
+          <div id="aiReason" class="reason">Waiting for AI...</div>
+        </article>
       </section>
 
       <section class="card" style="margin-top: 14px">
@@ -175,6 +180,7 @@
       const recentWindow = 20;
       const pollMs = 3_000;
       const storageKey = "wingo-browser-history-v1";
+      let lastAiIssue = null;
 
       function normalizeRecord(raw) {
         const number = Number(raw.number);
@@ -451,9 +457,51 @@
           latestIssue: records[0]?.issueNumber,
           source: "browser-live",
           warning: "Vercel server was blocked by upstream, so this data was fetched from your browser.",
+          records: records.slice(0, 120),
           analysis,
           prediction: predictClient(records),
         };
+      }
+
+      async function loadAiPrediction(records) {
+        if (!records?.length) return;
+        if (records[0]?.issueNumber === lastAiIssue) return;
+        lastAiIssue = records[0]?.issueNumber;
+
+        document.querySelector("#aiReason").textContent = "Groq analyzing...";
+
+        try {
+          const response = await fetch("/api/ai-prediction", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ records }),
+          });
+          const data = await response.json();
+
+          if (!response.ok) {
+            throw new Error(data.error || "AI request failed");
+          }
+
+          const prediction = data.prediction || {};
+          document.querySelector("#aiPrediction").textContent =
+            prediction.predictedRange && prediction.rangeLabel
+              ? `${prediction.predictedRange} (${prediction.rangeLabel})`
+              : "-";
+          document.querySelector("#aiReason").textContent =
+            `${data.source === "groq" ? "Groq" : "Fallback"}: ` +
+            `${prediction.reason || data.warning || "No reason returned."}`;
+
+          if (Array.isArray(prediction.topNumbers) && prediction.topNumbers.length) {
+            document.querySelector("#numbers").textContent = prediction.topNumbers
+              .slice(0, 2)
+              .join(", ");
+          }
+          if (prediction.confidence) {
+            document.querySelector("#confidence").textContent = prediction.confidence;
+          }
+        } catch (error) {
+          document.querySelector("#aiReason").textContent = error.message;
+        }
       }
 
       function renderData(data) {
@@ -476,6 +524,8 @@
         statusEl.textContent = data.warning && data.source !== "browser-live"
           ? `Sample data: ${data.warning}`
           : `Updated ${new Date(data.updatedAt).toLocaleTimeString()} (${data.source})`;
+
+        loadAiPrediction(data.records || data.prediction.recentResults);
       }
 
       async function loadPrediction() {
