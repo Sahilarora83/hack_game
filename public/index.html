@@ -332,6 +332,7 @@
         if (!prediction?.predictedRange || !Number.isInteger(Number(prediction.predictedNumber))) {
           return;
         }
+        if (source !== "groq") return;
         if (prediction.action === "SKIP") return;
 
         const history = loadPredictionHistory();
@@ -344,6 +345,7 @@
           confidence: prediction.confidence || "Low",
           action: prediction.action || "TRACK",
           source: source || "local",
+          reason: prediction.reason || null,
           createdAt: new Date().toISOString(),
           status: "pending",
         };
@@ -824,7 +826,10 @@
           }
 
           const prediction = data.prediction || {};
-          applyPrimaryPrediction(prediction, data.source, prediction.reason || data.warning);
+          const displayReason = data.source === "groq"
+            ? (prediction.reason || data.warning)
+            : (data.warning || prediction.reason);
+          applyPrimaryPrediction(prediction, data.source, displayReason);
           rememberPrediction(records[0]?.issueNumber, prediction, data.source);
           syncSupabase(records, prediction, data.source, { force: true });
           lastAiResult = data;
