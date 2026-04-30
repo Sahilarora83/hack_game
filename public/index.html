@@ -247,10 +247,8 @@
       const pollMs = 3_000;
       const storageKey = "wingo-browser-history-v1";
       const predictionStorageKey = "wingo-prediction-history-v1";
-      const aiCacheKey = "wingo-ai-cache-v1";
-      const aiMinIntervalMs = 90_000;
+      const aiMinIntervalMs = 10_000;
       const bulkSyncIntervalMs = 60_000;
-      let lastAiIssue = null;
       let lastAiResult = null;
       let lastAiCallAt = 0;
       let lastSupabaseSyncAt = 0;
@@ -310,20 +308,6 @@
 
       function savePredictionHistory(history) {
         localStorage.setItem(predictionStorageKey, JSON.stringify(history.slice(0, 200)));
-      }
-
-      function loadAiCache() {
-        try {
-          const stored = JSON.parse(localStorage.getItem(aiCacheKey) || "{}");
-          return stored && typeof stored === "object" ? stored : {};
-        } catch {
-          return {};
-        }
-      }
-
-      function saveAiCache(cache) {
-        const entries = Object.entries(cache).slice(-80);
-        localStorage.setItem(aiCacheKey, JSON.stringify(Object.fromEntries(entries)));
       }
 
       function chunkArray(items, size) {
@@ -540,17 +524,7 @@
       }
 
       function shouldAskGroq(records, localPrediction) {
-        const history = loadPredictionHistory();
-        const recentGraded = history.filter((entry) => entry.status === "graded").slice(0, 12);
-        const recentRangeAccuracy = recentGraded.length
-          ? recentGraded.filter((entry) => entry.rangeCorrect).length / recentGraded.length
-          : 0.5;
-        const streak = detectStreaks(records).sizeStreak;
-        const isStrongStreak = streak?.length >= 3;
-        const isWeakLocal = localPrediction?.confidence === "Low";
-        const enoughTimePassed = Date.now() - lastAiCallAt >= aiMinIntervalMs;
-
-        return enoughTimePassed && (isStrongStreak || isWeakLocal || recentRangeAccuracy < 0.55);
+        return Date.now() - lastAiCallAt >= aiMinIntervalMs;
       }
 
       function decideAction(prediction) {
@@ -821,41 +795,18 @@
 
       async function loadAiPrediction(records) {
         if (!records?.length) return;
-        const issueForPrediction = nextIssueNumber(records[0]?.issueNumber);
-        const cache = loadAiCache();
-
-        if (cache[issueForPrediction]) {
-          lastAiResult = cache[issueForPrediction];
-          lastAiIssue = records[0]?.issueNumber;
-          applyPrimaryPrediction(
-            lastAiResult.prediction,
-            lastAiResult.source,
-            lastAiResult.prediction?.reason || lastAiResult.warning
-          );
-          return lastAiResult;
-        }
-
-        if (records[0]?.issueNumber === lastAiIssue && lastAiResult) {
-          applyPrimaryPrediction(
-            lastAiResult.prediction,
-            lastAiResult.source,
-            lastAiResult.prediction?.reason || lastAiResult.warning
-          );
-          return lastAiResult;
-        }
 
         const localPrediction = predictClient(records);
         if (!shouldAskGroq(records, localPrediction)) {
           document.querySelector("#aiReason").textContent =
-            "Groq skipped to save API usage. Local prediction is active.";
+            "Groq full-time mode: next AI analysis in a few seconds.";
           rememberPrediction(records[0]?.issueNumber, localPrediction, "local");
           return null;
         }
 
-        lastAiIssue = records[0]?.issueNumber;
         lastAiCallAt = Date.now();
 
-        document.querySelector("#aiReason").textContent = "Groq analyzing...";
+        document.querySelector("#aiReason").textContent = "Groq analyzing live pattern...";
 
         try {
           const response = await fetch("/api/ai-prediction", {
@@ -874,8 +825,6 @@
           rememberPrediction(records[0]?.issueNumber, prediction, data.source);
           syncSupabase(records, prediction, data.source, { force: true });
           lastAiResult = data;
-          cache[issueForPrediction] = data;
-          saveAiCache(cache);
           return data;
         } catch (error) {
           document.querySelector("#aiReason").textContent = error.message;
