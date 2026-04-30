@@ -1,4 +1,12 @@
-const { analyze, fetchDataset, predict } = require("../wingo-analyzer");
+const fs = require("fs/promises");
+const path = require("path");
+const { analyze, extractRecords, fetchDataset, predict } = require("../wingo-analyzer");
+
+async function loadBundledSample() {
+  const samplePath = path.join(process.cwd(), "GetHistoryIssuePage.json");
+  const sample = JSON.parse(await fs.readFile(samplePath, "utf8"));
+  return extractRecords(sample);
+}
 
 module.exports = async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -14,7 +22,17 @@ module.exports = async function handler(req, res) {
 
   try {
     const targetRecords = Number(req.query.records || process.env.WINGO_TARGET_RECORDS || 500);
-    const records = await fetchDataset(targetRecords);
+    let records;
+    let warning = null;
+
+    try {
+      records = await fetchDataset(targetRecords);
+    } catch (error) {
+      warning =
+        `Live upstream API failed: ${error.message}. Showing bundled sample data instead. ` +
+        "Set WINGO_API_URL in Vercel to a working public history JSON endpoint for live mode.";
+      records = await loadBundledSample();
+    }
 
     if (records.length === 0) {
       return res.status(502).json({
@@ -25,6 +43,8 @@ module.exports = async function handler(req, res) {
     return res.status(200).json({
       updatedAt: new Date().toISOString(),
       latestIssue: records[0]?.issueNumber,
+      source: warning ? "sample" : "live",
+      warning,
       analysis: analyze(records),
       prediction: predict(records),
       disclaimer:

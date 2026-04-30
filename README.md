@@ -33,3 +33,5 @@ API:
 ```text
 /api/prediction
 ```
+
+If the dashboard shows sample data, set `WINGO_API_URL` in Vercel to the working public history JSON endpoint. The default endpoint can fail with `404` if the provider changes paths or blocks that route.

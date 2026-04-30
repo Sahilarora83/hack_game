@@ -136,7 +136,9 @@
           document.querySelector("#issue").textContent = data.latestIssue;
           document.querySelector("#records").textContent = data.analysis.totalRecords;
           document.querySelector("#analysis").textContent = JSON.stringify(data, null, 2);
-          statusEl.textContent = `Updated ${new Date(data.updatedAt).toLocaleTimeString()}`;
+          statusEl.textContent = data.warning
+            ? `Sample data: ${data.warning}`
+            : `Updated ${new Date(data.updatedAt).toLocaleTimeString()}`;
         } catch (error) {
           statusEl.textContent = error.message;
         } finally {
