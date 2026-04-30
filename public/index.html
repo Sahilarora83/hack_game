@@ -249,10 +249,13 @@
       const predictionStorageKey = "wingo-prediction-history-v1";
       const aiCacheKey = "wingo-ai-cache-v1";
       const aiMinIntervalMs = 90_000;
+      const bulkSyncIntervalMs = 60_000;
       let lastAiIssue = null;
       let lastAiResult = null;
       let lastAiCallAt = 0;
       let lastSupabaseSyncAt = 0;
+      let lastSupabaseIssue = null;
+      let lastBulkSyncAt = 0;
 
       function normalizeRecord(raw) {
         const number = Number(raw.number);
@@ -438,7 +441,7 @@
       }
 
       async function syncSupabase(results, prediction, source, options = {}) {
-        if (Date.now() - lastSupabaseSyncAt < 10_000) return;
+        if (!options.force && Date.now() - lastSupabaseSyncAt < 10_000) return;
         lastSupabaseSyncAt = Date.now();
 
         const predictions = options.allPredictions || (prediction
@@ -481,7 +484,10 @@
           const results = loadStoredRecords();
           const allPredictions = historyToSupabasePredictions();
           lastSupabaseSyncAt = 0;
-          const result = await syncSupabase(results, null, "local", { allPredictions });
+          const result = await syncSupabase(results, null, "local", {
+            allPredictions,
+            force: true,
+          });
           statusEl.textContent = result?.ok
             ? `Supabase synced: ${result.syncedResults} results, ${result.syncedPredictions} predictions`
             : `Supabase sync failed: ${result?.error || "unknown error"}`;
@@ -490,6 +496,25 @@
           setTimeout(() => {
             if (statusEl.textContent.startsWith("Supabase")) statusEl.textContent = oldStatus;
           }, 6000);
+        }
+      }
+
+      async function syncRealtimeToSupabase(data) {
+        const records = data.records || [];
+        if (!records.length) return;
+
+        if (data.latestIssue !== lastSupabaseIssue) {
+          lastSupabaseIssue = data.latestIssue;
+          await syncSupabase(records, data.prediction, "local", { force: true });
+        }
+
+        if (Date.now() - lastBulkSyncAt >= bulkSyncIntervalMs) {
+          lastBulkSyncAt = Date.now();
+          const allPredictions = historyToSupabasePredictions();
+          await syncSupabase(loadStoredRecords(), null, "local", {
+            allPredictions,
+            force: true,
+          });
         }
       }
 
@@ -826,7 +851,7 @@
           const prediction = data.prediction || {};
           applyPrimaryPrediction(prediction, data.source, prediction.reason || data.warning);
           rememberPrediction(records[0]?.issueNumber, prediction, data.source);
-          syncSupabase(records, prediction, data.source);
+          syncSupabase(records, prediction, data.source, { force: true });
           lastAiResult = data;
           cache[issueForPrediction] = data;
           saveAiCache(cache);
@@ -910,7 +935,7 @@
 
         gradePredictionHistory(data.records || []);
         rememberPrediction(data.latestIssue, data.prediction, "local");
-        syncSupabase(data.records || [], data.prediction, "local");
+        syncRealtimeToSupabase(data);
         loadAiPrediction(data.records || data.prediction.recentResults);
       }
 
