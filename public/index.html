@@ -133,8 +133,9 @@
 
       <section class="grid">
         <article class="card">
-          <div class="label">Next Prediction</div>
+          <div class="label">Next Issue Prediction</div>
           <div id="prediction" class="value">-</div>
+          <div id="predictionSource" class="reason">Waiting for live data...</div>
         </article>
         <article class="card">
           <div class="label">Predicted Number</div>
@@ -187,6 +188,7 @@
       const pollMs = 3_000;
       const storageKey = "wingo-browser-history-v1";
       let lastAiIssue = null;
+      let lastAiResult = null;
 
       function normalizeRecord(raw) {
         const number = Number(raw.number);
@@ -480,7 +482,14 @@
 
       async function loadAiPrediction(records) {
         if (!records?.length) return;
-        if (records[0]?.issueNumber === lastAiIssue) return;
+        if (records[0]?.issueNumber === lastAiIssue && lastAiResult) {
+          applyPrimaryPrediction(
+            lastAiResult.prediction,
+            lastAiResult.source,
+            lastAiResult.prediction?.reason || lastAiResult.warning
+          );
+          return lastAiResult;
+        }
         lastAiIssue = records[0]?.issueNumber;
 
         document.querySelector("#aiReason").textContent = "Groq analyzing...";
@@ -498,40 +507,52 @@
           }
 
           const prediction = data.prediction || {};
-          document.querySelector("#aiPrediction").textContent =
-            prediction.predictedRange && prediction.rangeLabel
-              ? `${prediction.predictedRange} (${prediction.rangeLabel})`
-              : "-";
-          document.querySelector("#aiReason").textContent =
-            `${data.source === "groq" ? "Groq" : "Fallback"}: ` +
-            `${prediction.reason || data.warning || "No reason returned."}`;
-
-          if (Array.isArray(prediction.topNumbers) && prediction.topNumbers.length) {
-            document.querySelector("#numbers").textContent = prediction.topNumbers
-              .slice(0, 2)
-              .join(", ");
-          }
-          if (Number.isInteger(Number(prediction.predictedNumber))) {
-            document.querySelector("#predictedNumber").textContent = prediction.predictedNumber;
-          }
-          if (prediction.predictedRange && prediction.rangeLabel) {
-            document.querySelector("#prediction").textContent =
-              `${prediction.predictedRange} (${prediction.rangeLabel})`;
-          }
-          if (prediction.confidence) {
-            document.querySelector("#confidence").textContent = prediction.confidence;
-          }
-          if (prediction.reason) {
-            document.querySelector("#reason").textContent = `AI primary: ${prediction.reason}`;
-          }
+          applyPrimaryPrediction(prediction, data.source, prediction.reason || data.warning);
+          lastAiResult = data;
+          return data;
         } catch (error) {
           document.querySelector("#aiReason").textContent = error.message;
+          return null;
+        }
+      }
+
+      function applyPrimaryPrediction(prediction, source, reason) {
+        const sourceLabel = source === "groq" ? "Groq AI" : "Local fallback";
+
+        document.querySelector("#aiPrediction").textContent =
+          prediction.predictedRange && prediction.rangeLabel
+            ? `${prediction.predictedRange} (${prediction.rangeLabel})`
+            : "-";
+        document.querySelector("#aiReason").textContent =
+          `${sourceLabel}: ${reason || "No reason returned."}`;
+
+        if (prediction.predictedRange && prediction.rangeLabel) {
+          document.querySelector("#prediction").textContent =
+            `${prediction.predictedRange} (${prediction.rangeLabel})`;
+          document.querySelector("#predictionSource").textContent =
+            `${sourceLabel} prediction for the next issue.`;
+        }
+        if (Number.isInteger(Number(prediction.predictedNumber))) {
+          document.querySelector("#predictedNumber").textContent = prediction.predictedNumber;
+        }
+        if (Array.isArray(prediction.topNumbers) && prediction.topNumbers.length) {
+          document.querySelector("#numbers").textContent = prediction.topNumbers
+            .slice(0, 2)
+            .join(", ");
+        }
+        if (prediction.confidence) {
+          document.querySelector("#confidence").textContent = prediction.confidence;
+        }
+        if (reason) {
+          document.querySelector("#reason").textContent = `${sourceLabel}: ${reason}`;
         }
       }
 
       function renderData(data) {
         document.querySelector("#prediction").textContent =
           `${data.prediction.predictedRange} (${data.prediction.rangeLabel})`;
+        document.querySelector("#predictionSource").textContent =
+          "Instant local fallback while Groq AI checks the next issue.";
         document.querySelector("#predictedNumber").textContent =
           data.prediction.predictedNumber ?? data.prediction.topNumbers[0] ?? "-";
         document.querySelector("#numbers").textContent =
