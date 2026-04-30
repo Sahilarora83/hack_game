@@ -1,0 +1,20 @@
+{
+    "gameCode": "WinGo_30S",
+    "intervalMinute": 0.50,
+    "state": 1,
+    "previous": {
+        "issueNumber": "20260430100052041",
+        "startTime": 1777568400000,
+        "endTime": 1777568430000
+    },
+    "current": {
+        "issueNumber": "20260430100052042",
+        "startTime": 1777568430000,
+        "endTime": 1777568460000
+    },
+    "next": {
+        "issueNumber": "20260430100052043",
+        "startTime": 1777568460000,
+        "endTime": 1777568490000
+    }
+}

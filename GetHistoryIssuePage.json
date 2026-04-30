@@ -1,0 +1,83 @@
+{
+    "data": {
+        "list": [
+            {
+                "issueNumber": "20260430100052047",
+                "number": "8",
+                "color": "red",
+                "premium": "8",
+                "sum": 0
+            },
+            {
+                "issueNumber": "20260430100052046",
+                "number": "7",
+                "color": "green",
+                "premium": "7",
+                "sum": 0
+            },
+            {
+                "issueNumber": "20260430100052045",
+                "number": "1",
+                "color": "green",
+                "premium": "1",
+                "sum": 0
+            },
+            {
+                "issueNumber": "20260430100052044",
+                "number": "1",
+                "color": "green",
+                "premium": "1",
+                "sum": 0
+            },
+            {
+                "issueNumber": "20260430100052043",
+                "number": "7",
+                "color": "green",
+                "premium": "7",
+                "sum": 0
+            },
+            {
+                "issueNumber": "20260430100052042",
+                "number": "3",
+                "color": "green",
+                "premium": "3",
+                "sum": 0
+            },
+            {
+                "issueNumber": "20260430100052041",
+                "number": "8",
+                "color": "red",
+                "premium": "8",
+                "sum": 0
+            },
+            {
+                "issueNumber": "20260430100052040",
+                "number": "8",
+                "color": "red",
+                "premium": "8",
+                "sum": 0
+            },
+            {
+                "issueNumber": "20260430100052039",
+                "number": "4",
+                "color": "red",
+                "premium": "4",
+                "sum": 0
+            },
+            {
+                "issueNumber": "20260430100052038",
+                "number": "5",
+                "color": "green,violet",
+                "premium": "5",
+                "sum": 0
+            }
+        ],
+        "pageNo": 1,
+        "totalPage": 50,
+        "totalCount": 500
+    },
+    "code": 0,
+    "msg": "Succeed",
+    "msgCode": 0,
+    "serviceTime": 1777568607280
+}

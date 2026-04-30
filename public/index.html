@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>WinGo Analyzer</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: Arial, Helvetica, sans-serif;
+        background: #f5f7fb;
+        color: #18202f;
+      }
+
+      body {
+        margin: 0;
+      }
+
+      main {
+        max-width: 920px;
+        margin: 0 auto;
+        padding: 32px 18px;
+      }
+
+      h1 {
+        margin: 0 0 8px;
+        font-size: 30px;
+      }
+
+      .muted {
+        color: #5d6678;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 14px;
+        margin-top: 22px;
+      }
+
+      .card {
+        background: #fff;
+        border: 1px solid #dfe5ef;
+        border-radius: 8px;
+        padding: 18px;
+        box-shadow: 0 8px 24px rgba(24, 32, 47, 0.06);
+      }
+
+      .label {
+        font-size: 13px;
+        color: #697386;
+        margin-bottom: 8px;
+      }
+
+      .value {
+        font-size: 24px;
+        font-weight: 700;
+      }
+
+      pre {
+        overflow: auto;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
+      button {
+        border: 0;
+        border-radius: 6px;
+        padding: 10px 14px;
+        background: #2563eb;
+        color: white;
+        font-weight: 700;
+        cursor: pointer;
+      }
+
+      button:disabled {
+        cursor: wait;
+        opacity: 0.7;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>WinGo Analyzer</h1>
+      <p class="muted">Public API data se statistical analysis. Prediction guaranteed nahi hai.</p>
+      <button id="refresh">Refresh</button>
+      <span id="status" class="muted">Loading...</span>
+
+      <section class="grid">
+        <article class="card">
+          <div class="label">Next Prediction</div>
+          <div id="prediction" class="value">-</div>
+        </article>
+        <article class="card">
+          <div class="label">Likely Numbers</div>
+          <div id="numbers" class="value">-</div>
+        </article>
+        <article class="card">
+          <div class="label">Latest Issue</div>
+          <div id="issue" class="value">-</div>
+        </article>
+        <article class="card">
+          <div class="label">Records</div>
+          <div id="records" class="value">-</div>
+        </article>
+      </section>
+
+      <section class="card" style="margin-top: 14px">
+        <div class="label">Full Analysis</div>
+        <pre id="analysis">Waiting for data...</pre>
+      </section>
+    </main>
+
+    <script>
+      const refreshButton = document.querySelector("#refresh");
+      const statusEl = document.querySelector("#status");
+
+      async function loadPrediction() {
+        refreshButton.disabled = true;
+        statusEl.textContent = "Updating...";
+
+        try {
+          const response = await fetch("/api/prediction");
+          const data = await response.json();
+
+          if (!response.ok) {
+            throw new Error(data.error || "Request failed");
+          }
+
+          document.querySelector("#prediction").textContent =
+            `${data.prediction.predictedRange} (${data.prediction.rangeLabel})`;
+          document.querySelector("#numbers").textContent =
+            data.prediction.topNumbers.join(", ");
+          document.querySelector("#issue").textContent = data.latestIssue;
+          document.querySelector("#records").textContent = data.analysis.totalRecords;
+          document.querySelector("#analysis").textContent = JSON.stringify(data, null, 2);
+          statusEl.textContent = `Updated ${new Date(data.updatedAt).toLocaleTimeString()}`;
+        } catch (error) {
+          statusEl.textContent = error.message;
+        } finally {
+          refreshButton.disabled = false;
+        }
+      }
+
+      refreshButton.addEventListener("click", loadPrediction);
+      loadPrediction();
+      setInterval(loadPrediction, 30_000);
+    </script>
+  </body>
+</html>
