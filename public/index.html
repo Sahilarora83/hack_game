@@ -118,6 +118,8 @@
       const statusEl = document.querySelector("#status");
       const publicHistoryUrl =
         "https://draw.ar-lottery01.com/WinGo/WinGo_30S/GetHistoryIssuePage.json";
+      const targetRecords = 500;
+      const recentWindow = 20;
 
       function normalizeRecord(raw) {
         const number = Number(raw.number);
@@ -138,6 +140,16 @@
         return list.map(normalizeRecord).filter(Boolean);
       }
 
+      function mergeRecords(existing, incoming) {
+        const byIssue = new Map();
+        [...existing, ...incoming].forEach((record) => {
+          byIssue.set(record.issueNumber, record);
+        });
+        return [...byIssue.values()]
+          .sort((a, b) => BigInt(b.issueNumber) > BigInt(a.issueNumber) ? 1 : -1)
+          .slice(0, targetRecords);
+      }
+
       function sizeOf(number) {
         return number >= 5 ? "Big" : "Small";
       }
@@ -150,53 +162,176 @@
         return counts;
       }
 
-      function analyzeClient(records) {
+      function bigSmallRatio(records) {
         const counts = { Big: 0, Small: 0 };
         records.forEach((record) => {
           counts[sizeOf(record.number)] += 1;
         });
+        const total = counts.Big + counts.Small || 1;
         return {
-          totalRecords: records.length,
-          frequency: frequency(records),
-          bigSmall: {
-            counts,
-            ratio: {
-              Big: Number((counts.Big / records.length).toFixed(3)),
-              Small: Number((counts.Small / records.length).toFixed(3)),
-            },
+          counts,
+          ratio: {
+            Big: Number((counts.Big / total).toFixed(3)),
+            Small: Number((counts.Small / total).toFixed(3)),
           },
         };
       }
 
+      function detectStreaks(records) {
+        if (records.length === 0) {
+          return { numberStreak: null, sizeStreak: null };
+        }
+
+        const latest = records[0];
+        let numberLength = 0;
+        let sizeLength = 0;
+
+        for (const record of records) {
+          if (record.number === latest.number) numberLength += 1;
+          else break;
+        }
+
+        for (const record of records) {
+          if (sizeOf(record.number) === sizeOf(latest.number)) sizeLength += 1;
+          else break;
+        }
+
+        return {
+          numberStreak: { value: latest.number, length: numberLength },
+          sizeStreak: { value: sizeOf(latest.number), length: sizeLength },
+        };
+      }
+
+      function transitionProbabilities(records) {
+        const counts = {
+          "Big->Big": 0,
+          "Big->Small": 0,
+          "Small->Big": 0,
+          "Small->Small": 0,
+        };
+        const chronological = [...records].reverse();
+
+        for (let i = 1; i < chronological.length; i += 1) {
+          const previous = sizeOf(chronological[i - 1].number);
+          const current = sizeOf(chronological[i].number);
+          counts[`${previous}->${current}`] += 1;
+        }
+
+        const bigTotal = counts["Big->Big"] + counts["Big->Small"] || 1;
+        const smallTotal = counts["Small->Big"] + counts["Small->Small"] || 1;
+
+        return {
+          counts,
+          probabilities: {
+            "Big->Big": Number((counts["Big->Big"] / bigTotal).toFixed(3)),
+            "Big->Small": Number((counts["Big->Small"] / bigTotal).toFixed(3)),
+            "Small->Big": Number((counts["Small->Big"] / smallTotal).toFixed(3)),
+            "Small->Small": Number((counts["Small->Small"] / smallTotal).toFixed(3)),
+          },
+        };
+      }
+
+      function analyzeClient(records) {
+        return {
+          totalRecords: records.length,
+          frequency: frequency(records),
+          bigSmall: bigSmallRatio(records),
+          streaks: detectStreaks(records),
+          transitions: transitionProbabilities(records),
+        };
+      }
+
       function predictClient(records) {
-        const recent = records.slice(0, 20);
+        const recent = records.slice(0, recentWindow);
+        const recent10 = records.slice(0, 10);
+        const analysis = analyzeClient(records);
         const recentFrequency = frequency(recent);
-        const bigCount = recent.filter((record) => record.number >= 5).length;
-        const predictedRange = bigCount >= recent.length - bigCount ? "Big" : "Small";
+        const recentBigSmall = bigSmallRatio(recent);
+        const latestSize = records[0] ? sizeOf(records[0].number) : "Small";
+        const transition = analysis.transitions.probabilities;
+        const streak = analysis.streaks.sizeStreak;
+
+        let bigScore = recentBigSmall.ratio.Big;
+        let smallScore = recentBigSmall.ratio.Small;
+
+        if (latestSize === "Big") {
+          bigScore += transition["Big->Big"];
+          smallScore += transition["Big->Small"];
+        } else {
+          bigScore += transition["Small->Big"];
+          smallScore += transition["Small->Small"];
+        }
+
+        if (streak?.length >= 3) {
+          if (streak.value === "Big") smallScore += 0.35;
+          if (streak.value === "Small") bigScore += 0.35;
+        }
+
+        const predictedRange = bigScore >= smallScore ? "Big" : "Small";
         const rangeNumbers = predictedRange === "Big" ? [5, 6, 7, 8, 9] : [0, 1, 2, 3, 4];
         const topNumbers = rangeNumbers
-          .sort((a, b) => recentFrequency[b] - recentFrequency[a])
-          .slice(0, 2);
+          .map((number) => ({
+            number,
+            score:
+              (recentFrequency[number] || 0) * 2 +
+              (analysis.frequency[number] || 0) / Math.max(records.length, 1) +
+              (recent10.some((record) => record.number === number) ? 0.25 : 0),
+          }))
+          .sort((a, b) => b.score - a.score)
+          .slice(0, 2)
+          .map((item) => item.number);
+
         return {
           predictedRange,
           rangeLabel: predictedRange === "Big" ? "5-9" : "0-4",
           topNumbers,
+          scores: {
+            Big: Number(bigScore.toFixed(3)),
+            Small: Number(smallScore.toFixed(3)),
+          },
         };
       }
 
+      async function fetchHistoryPage(pageNo, pageSize) {
+        const url = new URL(publicHistoryUrl);
+        url.searchParams.set("pageNo", pageNo);
+        url.searchParams.set("pageSize", pageSize);
+        url.searchParams.set("page", pageNo);
+        url.searchParams.set("limit", pageSize);
+        url.searchParams.set("ts", Date.now());
+
+        const response = await fetch(url, { cache: "no-store" });
+        if (!response.ok) {
+          throw new Error(`Browser live request failed: ${response.status}`);
+        }
+        return extractRecords(await response.json());
+      }
+
+      async function fetchBrowserDataset() {
+        let records = [];
+
+        for (let pageNo = 1; records.length < targetRecords; pageNo += 1) {
+          const page = await fetchHistoryPage(pageNo, 50);
+          if (page.length === 0) break;
+
+          const before = records.length;
+          records = mergeRecords(records, page);
+          if (records.length === before) break;
+        }
+
+        return records;
+      }
+
       async function loadBrowserLiveData() {
-        const response = await fetch(`${publicHistoryUrl}?ts=${Date.now()}`, {
-          cache: "no-store",
-        });
-        const payload = await response.json();
-        const records = extractRecords(payload);
+        const records = await fetchBrowserDataset();
+        const analysis = analyzeClient(records);
         return {
-          appVersion: "browser-live-fallback",
+          appVersion: "browser-live-500-full-logic",
           updatedAt: new Date().toISOString(),
           latestIssue: records[0]?.issueNumber,
           source: "browser-live",
           warning: "Vercel server was blocked by upstream, so this data was fetched from your browser.",
-          analysis: analyzeClient(records),
+          analysis,
           prediction: predictClient(records),
         };
       }
