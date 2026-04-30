@@ -156,6 +156,7 @@
       <h1>WinGo Analyzer</h1>
       <p class="muted">Public API data se statistical analysis. Page open rakho, app local history collect karega. Prediction guaranteed nahi hai.</p>
       <button id="refresh">Refresh</button>
+      <button id="syncDb" type="button">Sync DB</button>
       <span id="status" class="muted">Loading...</span><span class="live-dot"></span>
 
       <section class="grid">
@@ -237,6 +238,7 @@
 
     <script>
       const refreshButton = document.querySelector("#refresh");
+      const syncDbButton = document.querySelector("#syncDb");
       const statusEl = document.querySelector("#status");
       const publicHistoryUrl =
         "https://draw.ar-lottery01.com/WinGo/WinGo_30S/GetHistoryIssuePage.json";
@@ -420,11 +422,26 @@
           .join("");
       }
 
-      async function syncSupabase(results, prediction, source) {
+      function historyToSupabasePredictions(history = loadPredictionHistory()) {
+        return history.map((entry) => ({
+          issueNumber: entry.issueNumber,
+          previousIssueNumber: entry.previousIssueNumber || null,
+          predictedNumber: entry.predictedNumber,
+          predictedRange: entry.predictedRange,
+          topNumbers: entry.topNumbers,
+          confidence: entry.confidence,
+          action: entry.action || "TRACK",
+          source: entry.source || "local",
+          reason: entry.reason || null,
+          rawResponse: entry,
+        }));
+      }
+
+      async function syncSupabase(results, prediction, source, options = {}) {
         if (Date.now() - lastSupabaseSyncAt < 10_000) return;
         lastSupabaseSyncAt = Date.now();
 
-        const predictions = prediction
+        const predictions = options.allPredictions || (prediction
           ? [{
               issueNumber: nextIssueNumber(results?.[0]?.issueNumber),
               previousIssueNumber: results?.[0]?.issueNumber,
@@ -437,10 +454,10 @@
               reason: prediction.reason,
               rawResponse: prediction,
             }]
-          : [];
+          : []);
 
         try {
-          await fetch("/api/supabase-sync", {
+          const response = await fetch("/api/supabase-sync", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -448,8 +465,31 @@
               predictions,
             }),
           });
+          return await response.json();
         } catch {
           // Local dashboard should keep working even if DB sync is unavailable.
+          return null;
+        }
+      }
+
+      async function syncAllToSupabase() {
+        syncDbButton.disabled = true;
+        const oldStatus = statusEl.textContent;
+        statusEl.textContent = "Syncing all local data to Supabase...";
+
+        try {
+          const results = loadStoredRecords();
+          const allPredictions = historyToSupabasePredictions();
+          lastSupabaseSyncAt = 0;
+          const result = await syncSupabase(results, null, "local", { allPredictions });
+          statusEl.textContent = result?.ok
+            ? `Supabase synced: ${result.syncedResults} results, ${result.syncedPredictions} predictions`
+            : `Supabase sync failed: ${result?.error || "unknown error"}`;
+        } finally {
+          syncDbButton.disabled = false;
+          setTimeout(() => {
+            if (statusEl.textContent.startsWith("Supabase")) statusEl.textContent = oldStatus;
+          }, 6000);
         }
       }
 
@@ -900,6 +940,7 @@
       }
 
       refreshButton.addEventListener("click", loadPrediction);
+      syncDbButton.addEventListener("click", syncAllToSupabase);
       renderPredictionHistory();
       loadPrediction();
       setInterval(loadPrediction, pollMs);

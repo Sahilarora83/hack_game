@@ -1,4 +1,6 @@
-const SUPABASE_URL = (process.env.SUPABASE_URL || "").replace(/\/$/, "");
+const SUPABASE_URL = (process.env.SUPABASE_URL || "")
+  .replace(/\/rest\/v1\/?$/, "")
+  .replace(/\/$/, "");
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 async function supabaseRequest(path, options = {}) {
