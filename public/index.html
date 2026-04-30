@@ -137,12 +137,18 @@
           <div id="prediction" class="value">-</div>
         </article>
         <article class="card">
+          <div class="label">Predicted Number</div>
+          <div id="predictedNumber" class="value">-</div>
+          <div id="nextIssue" class="reason">Next issue: -</div>
+        </article>
+        <article class="card">
           <div class="label">Likely Numbers</div>
           <div id="numbers" class="value">-</div>
         </article>
         <article class="card">
-          <div class="label">Latest Issue</div>
+          <div class="label">Latest Result</div>
           <div id="issue" class="value">-</div>
+          <div id="latestNumber" class="reason">Number: -</div>
         </article>
         <article class="card">
           <div class="label">Records</div>
@@ -222,6 +228,14 @@
 
       function saveStoredRecords(records) {
         localStorage.setItem(storageKey, JSON.stringify(records.slice(0, targetRecords)));
+      }
+
+      function nextIssueNumber(issueNumber) {
+        try {
+          return (BigInt(issueNumber) + 1n).toString();
+        } catch {
+          return "-";
+        }
       }
 
       function sizeOf(number) {
@@ -401,6 +415,7 @@
         return {
           predictedRange,
           rangeLabel: predictedRange === "Big" ? "5-9" : "0-4",
+          predictedNumber: topNumbers[0],
           topNumbers,
           confidence,
           reason: reasons.join(" ") || "Balanced recent frequency and Big/Small transitions.",
@@ -496,6 +511,9 @@
               .slice(0, 2)
               .join(", ");
           }
+          if (Number.isInteger(Number(prediction.predictedNumber))) {
+            document.querySelector("#predictedNumber").textContent = prediction.predictedNumber;
+          }
           if (prediction.predictedRange && prediction.rangeLabel) {
             document.querySelector("#prediction").textContent =
               `${prediction.predictedRange} (${prediction.rangeLabel})`;
@@ -514,9 +532,17 @@
       function renderData(data) {
         document.querySelector("#prediction").textContent =
           `${data.prediction.predictedRange} (${data.prediction.rangeLabel})`;
+        document.querySelector("#predictedNumber").textContent =
+          data.prediction.predictedNumber ?? data.prediction.topNumbers[0] ?? "-";
         document.querySelector("#numbers").textContent =
           data.prediction.topNumbers.join(", ");
         document.querySelector("#issue").textContent = data.latestIssue;
+        document.querySelector("#latestNumber").textContent =
+          data.records?.[0]
+            ? `Number: ${data.records[0].number} (${data.records[0].number >= 5 ? "Big" : "Small"})`
+            : "Number: -";
+        document.querySelector("#nextIssue").textContent =
+          `Next issue: ${nextIssueNumber(data.latestIssue)}`;
         document.querySelector("#records").textContent = data.analysis.totalRecords;
         document.querySelector("#confidence").textContent = data.prediction.confidence || "-";
         document.querySelector("#reason").textContent = data.prediction.reason || "-";

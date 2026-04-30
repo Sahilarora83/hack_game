@@ -38,6 +38,7 @@ function fallbackPrediction(records) {
   return {
     predictedRange,
     rangeLabel: predictedRange === "Small" ? "0-4" : "5-9",
+    predictedNumber: candidates.sort((a, b) => frequency[b] - frequency[a])[0],
     topNumbers: candidates.sort((a, b) => frequency[b] - frequency[a]).slice(0, 2),
     confidence: "Low",
     reason: "Groq AI is unavailable, so this is the local fallback based on recent frequency.",
@@ -120,8 +121,9 @@ module.exports = async function handler(req, res) {
           content:
             "Given these newest-first records, produce one JSON object with keys: " +
             "predictedRange ('Small' or 'Big'), rangeLabel ('0-4' or '5-9'), " +
-            "topNumbers (array of exactly two integers), confidence ('Low', 'Medium', or 'High'), " +
-            "reason (short Hinglish explanation). topNumbers must belong inside the predictedRange. " +
+            "predictedNumber (one integer 0-9), topNumbers (array of exactly two integers), " +
+            "confidence ('Low', 'Medium', or 'High'), reason (short Hinglish explanation). " +
+            "predictedNumber and topNumbers must belong inside the predictedRange. " +
             "Use recent 10-20 results, frequency, missing numbers, current streak, and Big/Small transitions. " +
             "If signals conflict, choose Low confidence and explain the conflict. " +
             "Return JSON only.\n\nSummary:\n" +
@@ -143,6 +145,9 @@ module.exports = async function handler(req, res) {
     const topNumbers = Array.isArray(prediction.topNumbers)
       ? prediction.topNumbers.map(Number).filter((number) => allowedNumbers.includes(number))
       : [];
+    const predictedNumber = allowedNumbers.includes(Number(prediction.predictedNumber))
+      ? Number(prediction.predictedNumber)
+      : topNumbers[0] || allowedNumbers[0];
 
     return res.status(200).json({
       source: "groq",
@@ -150,7 +155,10 @@ module.exports = async function handler(req, res) {
       prediction: {
         predictedRange: normalizedRange,
         rangeLabel: normalizedRange === "Big" ? "5-9" : "0-4",
-        topNumbers: [...topNumbers, ...allowedNumbers].slice(0, 2),
+        predictedNumber,
+        topNumbers: [predictedNumber, ...topNumbers, ...allowedNumbers]
+          .filter((number, index, list) => list.indexOf(number) === index)
+          .slice(0, 2),
         confidence: ["Low", "Medium", "High"].includes(prediction.confidence)
           ? prediction.confidence
           : "Low",
