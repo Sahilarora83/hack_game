@@ -217,7 +217,8 @@
       <div class="actions">
         <button id="refresh">Refresh</button>
         <button id="syncDb" type="button">Sync DB</button>
-        <button id="clearHistory" class="secondary-button" type="button">Clear History</button>
+        <button id="restoreHistory" class="secondary-button" type="button">Restore DB History</button>
+        <button id="clearHistory" class="secondary-button" type="button">Clear Local History</button>
         <span id="status" class="muted">Loading...</span><span class="live-dot"></span>
       </div>
 
@@ -254,6 +255,11 @@
           <div class="label">Action</div>
           <div id="action" class="value">-</div>
           <div id="actionReason" class="reason">Waiting for signals...</div>
+        </article>
+        <article class="card">
+          <div class="label">Buy?</div>
+          <div id="buyDecision" class="value">NO BUY</div>
+          <div id="buyReason" class="reason">Real money ke liye guaranteed signal nahi hai.</div>
         </article>
         <article class="card">
           <div class="label">Groq AI Prediction</div>
@@ -301,6 +307,7 @@
     <script>
       const refreshButton = document.querySelector("#refresh");
       const syncDbButton = document.querySelector("#syncDb");
+      const restoreHistoryButton = document.querySelector("#restoreHistory");
       const clearHistoryButton = document.querySelector("#clearHistory");
       const statusEl = document.querySelector("#status");
       const publicHistoryUrl =
@@ -319,6 +326,7 @@
       let lastSupabaseSyncAt = 0;
       let lastSupabaseIssue = null;
       let lastBulkSyncAt = 0;
+      let restoredFromDb = false;
 
       function normalizeRecord(raw) {
         const number = Number(raw.number);
@@ -377,6 +385,36 @@
 
       function validTrackedHistory(history = loadPredictionHistory()) {
         return history.filter((entry) => ["fast", "groq"].includes(entry.source) && entry.action !== "SKIP");
+      }
+
+      function normalizeDbPrediction(row) {
+        const predictedNumber = Number(row.predicted_number);
+        if (!row.issue_number || !Number.isInteger(predictedNumber)) return null;
+        return {
+          issueNumber: String(row.issue_number),
+          previousIssueNumber: row.previous_issue_number ? String(row.previous_issue_number) : null,
+          predictedRange: row.predicted_range === "Big" ? "Big" : "Small",
+          predictedNumber,
+          topNumbers: Array.isArray(row.top_numbers)
+            ? row.top_numbers.map(Number).filter(Number.isInteger).slice(0, 2)
+            : [predictedNumber],
+          confidence: row.confidence || "Low",
+          action: row.action || "TRACK",
+          source: row.source === "groq" ? "groq" : "fast",
+          reason: row.reason || "Restored from Supabase.",
+          createdAt: row.created_at || new Date().toISOString(),
+          status: "pending",
+        };
+      }
+
+      function normalizeDbResult(row) {
+        const number = Number(row.number);
+        if (!row.issue_number || !Number.isInteger(number)) return null;
+        return {
+          issueNumber: String(row.issue_number),
+          number,
+          color: String(row.color || "unknown"),
+        };
       }
 
       function chunkArray(items, size) {
@@ -585,6 +623,50 @@
         }
       }
 
+      async function restoreHistoryFromSupabase(options = {}) {
+        if (restoredFromDb && !options.force) return;
+        restoredFromDb = true;
+        if (restoreHistoryButton) restoreHistoryButton.disabled = true;
+
+        try {
+          const response = await fetch("/api/supabase-sync?limit=500", { cache: "no-store" });
+          const data = await response.json();
+          if (!data.ok) {
+            if (options.force) statusEl.textContent = `DB restore failed: ${data.error || "unknown error"}`;
+            return;
+          }
+
+          const dbResults = (data.results || []).map(normalizeDbResult).filter(Boolean);
+          const dbPredictions = (data.predictions || []).map(normalizeDbPrediction).filter(Boolean);
+          if (dbResults.length) saveStoredRecords(mergeRecords(loadStoredRecords(), dbResults));
+
+          if (dbPredictions.length) {
+            const current = loadPredictionHistory();
+            const byKey = new Map();
+            [...dbPredictions, ...current].forEach((entry) => {
+              const key = entry.issueNumber;
+              const existing = byKey.get(key);
+              if (!existing || entry.source === "groq" || existing.source !== "groq") {
+                byKey.set(key, { ...existing, ...entry });
+              }
+            });
+            const restored = [...byKey.values()].sort((a, b) =>
+              BigInt(b.issueNumber) > BigInt(a.issueNumber) ? 1 : -1
+            );
+            savePredictionHistory(restored);
+            gradePredictionHistory(loadStoredRecords());
+          }
+
+          if (options.force) {
+            statusEl.textContent = `DB history restored: ${dbResults.length} results, ${dbPredictions.length} predictions`;
+          }
+        } catch (error) {
+          if (options.force) statusEl.textContent = `DB restore failed: ${error.message}`;
+        } finally {
+          if (restoreHistoryButton) restoreHistoryButton.disabled = false;
+        }
+      }
+
       async function syncRealtimeToSupabase(data) {
         const records = data.records || [];
         if (!records.length) return;
@@ -637,6 +719,25 @@
         return {
           action: "WATCH",
           reason: "Medium confidence hai, carefully observe karo.",
+        };
+      }
+
+      function decideBuy(prediction, actionDecision) {
+        const confidence = prediction?.confidence || "Low";
+        const action = actionDecision?.action || prediction?.action || "SKIP";
+
+        if (confidence !== "High" || action !== "STRONG") {
+          return {
+            label: "NO BUY",
+            reason:
+              "Real money ke liye signal strong nahi hai. Sirf observe/paper track karo.",
+          };
+        }
+
+        return {
+          label: "PAPER TRACK",
+          reason:
+            "High confidence signal hai, par guarantee nahi. Real-money buy advice nahi de raha; pehle paper track karo.",
         };
       }
 
@@ -1010,6 +1111,9 @@
         }
         document.querySelector("#action").textContent = decision.action;
         document.querySelector("#actionReason").textContent = decision.reason;
+        const buyDecision = decideBuy(prediction, decision);
+        document.querySelector("#buyDecision").textContent = buyDecision.label;
+        document.querySelector("#buyReason").textContent = buyDecision.reason;
         if (reason) {
           document.querySelector("#reason").textContent = `${sourceLabel}: ${reason}`;
         }
@@ -1044,6 +1148,9 @@
           document.querySelector("#action").textContent = localDecision.action;
           document.querySelector("#actionReason").textContent =
             `${localDecision.reason} Fast signal hai; Groq/API limit ke time ye instant rahega.`;
+          const buyDecision = decideBuy(data.prediction, localDecision);
+          document.querySelector("#buyDecision").textContent = buyDecision.label;
+          document.querySelector("#buyReason").textContent = buyDecision.reason;
         }
         document.querySelector("#lastResults").innerHTML = (data.prediction.recentResults || [])
           .map((result) => (
@@ -1090,12 +1197,18 @@
 
       refreshButton.addEventListener("click", loadPrediction);
       syncDbButton.addEventListener("click", syncAllToSupabase);
+      restoreHistoryButton.addEventListener("click", () => restoreHistoryFromSupabase({ force: true }));
       clearHistoryButton.addEventListener("click", () => {
+        const ok = confirm(
+          "Sirf is browser ki local prediction history clear hogi. Supabase/DB data delete nahi hoga. Continue?"
+        );
+        if (!ok) return;
         savePredictionHistory([]);
         renderPredictionHistory([]);
-        statusEl.textContent = "Prediction history cleared.";
+        statusEl.textContent = "Local prediction history cleared. Restore DB History se wapas la sakte ho.";
       });
       renderPredictionHistory();
+      restoreHistoryFromSupabase();
       loadPrediction();
       setInterval(loadPrediction, pollMs);
     </script>

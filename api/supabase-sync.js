@@ -88,10 +88,43 @@ function normalizePrediction(prediction) {
 
 module.exports = async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
   if (req.method === "OPTIONS") return res.status(204).end();
+  if (req.method === "GET") {
+    try {
+      const limit = Math.min(Math.max(Number(req.query?.limit) || 500, 1), 1000);
+      const [resultsResponse, predictionsResponse] = await Promise.all([
+        supabaseRequest(
+          `wingo_results?select=issue_number,number,color,source,created_at&order=issue_number.desc&limit=${limit}`,
+          { method: "GET", headers: { Prefer: "return=representation" } }
+        ),
+        supabaseRequest(
+          "wingo_predictions?select=issue_number,previous_issue_number,predicted_number,predicted_range,top_numbers,confidence,action,source,reason,created_at&order=issue_number.desc&limit=500",
+          { method: "GET", headers: { Prefer: "return=representation" } }
+        ),
+      ]);
+
+      const [results, predictions] = await Promise.all([
+        resultsResponse.json(),
+        predictionsResponse.json(),
+      ]);
+
+      return res.status(200).json({
+        ok: true,
+        results,
+        predictions,
+      });
+    } catch (error) {
+      return res.status(200).json({
+        ok: false,
+        disabled: error.message.includes("env vars"),
+        error: error.message,
+      });
+    }
+  }
+
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
   try {
