@@ -250,6 +250,7 @@
       let lastAiIssue = null;
       let lastAiResult = null;
       let lastAiCallAt = 0;
+      let lastSupabaseSyncAt = 0;
 
       function normalizeRecord(raw) {
         const number = Number(raw.number);
@@ -417,6 +418,39 @@
             `;
           })
           .join("");
+      }
+
+      async function syncSupabase(results, prediction, source) {
+        if (Date.now() - lastSupabaseSyncAt < 10_000) return;
+        lastSupabaseSyncAt = Date.now();
+
+        const predictions = prediction
+          ? [{
+              issueNumber: nextIssueNumber(results?.[0]?.issueNumber),
+              previousIssueNumber: results?.[0]?.issueNumber,
+              predictedNumber: prediction.predictedNumber,
+              predictedRange: prediction.predictedRange,
+              topNumbers: prediction.topNumbers,
+              confidence: prediction.confidence,
+              action: prediction.action,
+              source,
+              reason: prediction.reason,
+              rawResponse: prediction,
+            }]
+          : [];
+
+        try {
+          await fetch("/api/supabase-sync", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              results: results || [],
+              predictions,
+            }),
+          });
+        } catch {
+          // Local dashboard should keep working even if DB sync is unavailable.
+        }
       }
 
       function shouldAskGroq(records, localPrediction) {
@@ -752,6 +786,7 @@
           const prediction = data.prediction || {};
           applyPrimaryPrediction(prediction, data.source, prediction.reason || data.warning);
           rememberPrediction(records[0]?.issueNumber, prediction, data.source);
+          syncSupabase(records, prediction, data.source);
           lastAiResult = data;
           cache[issueForPrediction] = data;
           saveAiCache(cache);
@@ -835,6 +870,7 @@
 
         gradePredictionHistory(data.records || []);
         rememberPrediction(data.latestIssue, data.prediction, "local");
+        syncSupabase(data.records || [], data.prediction, "local");
         loadAiPrediction(data.records || data.prediction.recentResults);
       }
 

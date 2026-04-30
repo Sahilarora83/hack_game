@@ -41,3 +41,14 @@ For JaiClub-style public draw endpoints, this value can be used:
 ```text
 WINGO_API_URL=https://draw.ar-lottery01.com/WinGo/WinGo_30S/GetHistoryIssuePage.json
 ```
+
+## Supabase
+
+Run `supabase/schema.sql` in the Supabase SQL editor, then set these Vercel environment variables:
+
+```text
+SUPABASE_URL=https://aavxdoeerbnntmvtzaqh.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your_server_only_service_role_key
+```
+
+Use the service role key only in Vercel/server-side env vars. Do not put it in browser JavaScript.
