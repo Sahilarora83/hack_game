@@ -190,7 +190,7 @@
         <article class="card">
           <div class="label">Groq AI Prediction</div>
           <div id="aiPrediction" class="value">-</div>
-          <div id="aiReason" class="reason">Waiting for AI...</div>
+          <div id="aiReason" class="reason">Groq optimized: cache + throttling enabled.</div>
         </article>
       </section>
 
@@ -239,8 +239,11 @@
       const pollMs = 3_000;
       const storageKey = "wingo-browser-history-v1";
       const predictionStorageKey = "wingo-prediction-history-v1";
+      const aiCacheKey = "wingo-ai-cache-v1";
+      const aiMinIntervalMs = 90_000;
       let lastAiIssue = null;
       let lastAiResult = null;
+      let lastAiCallAt = 0;
 
       function normalizeRecord(raw) {
         const number = Number(raw.number);
@@ -295,6 +298,20 @@
 
       function savePredictionHistory(history) {
         localStorage.setItem(predictionStorageKey, JSON.stringify(history.slice(0, 200)));
+      }
+
+      function loadAiCache() {
+        try {
+          const stored = JSON.parse(localStorage.getItem(aiCacheKey) || "{}");
+          return stored && typeof stored === "object" ? stored : {};
+        } catch {
+          return {};
+        }
+      }
+
+      function saveAiCache(cache) {
+        const entries = Object.entries(cache).slice(-80);
+        localStorage.setItem(aiCacheKey, JSON.stringify(Object.fromEntries(entries)));
       }
 
       function nextIssueNumber(issueNumber) {
@@ -391,6 +408,20 @@
             `;
           })
           .join("");
+      }
+
+      function shouldAskGroq(records, localPrediction) {
+        const history = loadPredictionHistory();
+        const recentGraded = history.filter((entry) => entry.status === "graded").slice(0, 12);
+        const recentRangeAccuracy = recentGraded.length
+          ? recentGraded.filter((entry) => entry.rangeCorrect).length / recentGraded.length
+          : 0.5;
+        const streak = detectStreaks(records).sizeStreak;
+        const isStrongStreak = streak?.length >= 3;
+        const isWeakLocal = localPrediction?.confidence === "Low";
+        const enoughTimePassed = Date.now() - lastAiCallAt >= aiMinIntervalMs;
+
+        return enoughTimePassed && (isStrongStreak || isWeakLocal || recentRangeAccuracy < 0.55);
       }
 
       function sizeOf(number) {
@@ -635,6 +666,20 @@
 
       async function loadAiPrediction(records) {
         if (!records?.length) return;
+        const issueForPrediction = nextIssueNumber(records[0]?.issueNumber);
+        const cache = loadAiCache();
+
+        if (cache[issueForPrediction]) {
+          lastAiResult = cache[issueForPrediction];
+          lastAiIssue = records[0]?.issueNumber;
+          applyPrimaryPrediction(
+            lastAiResult.prediction,
+            lastAiResult.source,
+            lastAiResult.prediction?.reason || lastAiResult.warning
+          );
+          return lastAiResult;
+        }
+
         if (records[0]?.issueNumber === lastAiIssue && lastAiResult) {
           applyPrimaryPrediction(
             lastAiResult.prediction,
@@ -643,7 +688,17 @@
           );
           return lastAiResult;
         }
+
+        const localPrediction = predictClient(records);
+        if (!shouldAskGroq(records, localPrediction)) {
+          document.querySelector("#aiReason").textContent =
+            "Groq skipped to save API usage. Local prediction is active.";
+          rememberPrediction(records[0]?.issueNumber, localPrediction, "local");
+          return null;
+        }
+
         lastAiIssue = records[0]?.issueNumber;
+        lastAiCallAt = Date.now();
 
         document.querySelector("#aiReason").textContent = "Groq analyzing...";
 
@@ -663,6 +718,8 @@
           applyPrimaryPrediction(prediction, data.source, prediction.reason || data.warning);
           rememberPrediction(records[0]?.issueNumber, prediction, data.source);
           lastAiResult = data;
+          cache[issueForPrediction] = data;
+          saveAiCache(cache);
           return data;
         } catch (error) {
           document.querySelector("#aiReason").textContent = error.message;
