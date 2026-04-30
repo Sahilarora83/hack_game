@@ -31,9 +31,17 @@
         color: #5d6678;
       }
 
+      .actions {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 16px;
+      }
+
       .grid {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
         gap: 14px;
         margin-top: 22px;
       }
@@ -55,6 +63,7 @@
       .value {
         font-size: 24px;
         font-weight: 700;
+        overflow-wrap: anywhere;
       }
 
       .reason {
@@ -149,15 +158,63 @@
         color: #b91c1c;
         font-weight: 700;
       }
+
+      @media (max-width: 640px) {
+        main {
+          padding: 20px 12px;
+        }
+
+        h1 {
+          font-size: 26px;
+        }
+
+        .actions {
+          align-items: stretch;
+        }
+
+        .actions button {
+          flex: 1 1 110px;
+        }
+
+        #status {
+          flex-basis: 100%;
+          line-height: 1.45;
+        }
+
+        .grid {
+          gap: 10px;
+          margin-top: 16px;
+        }
+
+        .card {
+          padding: 14px;
+        }
+
+        .value {
+          font-size: 22px;
+        }
+
+        .result-pill {
+          flex: 1 0 44px;
+          min-width: 0;
+        }
+
+        table {
+          min-width: 680px;
+          font-size: 13px;
+        }
+      }
     </style>
   </head>
   <body>
     <main>
       <h1>WinGo Analyzer</h1>
       <p class="muted">Public API data se statistical analysis. Page open rakho, app local history collect karega. Prediction guaranteed nahi hai.</p>
-      <button id="refresh">Refresh</button>
-      <button id="syncDb" type="button">Sync DB</button>
-      <span id="status" class="muted">Loading...</span><span class="live-dot"></span>
+      <div class="actions">
+        <button id="refresh">Refresh</button>
+        <button id="syncDb" type="button">Sync DB</button>
+        <span id="status" class="muted">Loading...</span><span class="live-dot"></span>
+      </div>
 
       <section class="grid">
         <article class="card">
@@ -326,6 +383,15 @@
         }
       }
 
+      function escapeHtml(value) {
+        return String(value ?? "")
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#039;");
+      }
+
       function rememberPrediction(latestIssue, prediction, source) {
         const issueNumber = nextIssueNumber(latestIssue);
         if (!issueNumber || issueNumber === "-") return;
@@ -407,10 +473,10 @@
 
             return `
               <tr>
-                <td>${entry.issueNumber}</td>
-                <td>${entry.predictedNumber} ${entry.predictedRange}</td>
-                <td>${actual}</td>
-                <td>${entry.action || "TRACK"}</td>
+                <td>${escapeHtml(entry.issueNumber)}</td>
+                <td>${escapeHtml(entry.predictedNumber)} ${escapeHtml(entry.predictedRange)}</td>
+                <td>${escapeHtml(actual)}</td>
+                <td>${escapeHtml(entry.action || "TRACK")}</td>
                 <td>${rangeMark}</td>
                 <td>${numberMark}</td>
               </tr>
@@ -831,7 +897,9 @@
             : (data.warning || prediction.reason);
           applyPrimaryPrediction(prediction, data.source, displayReason);
           rememberPrediction(records[0]?.issueNumber, prediction, data.source);
-          syncSupabase(records, prediction, data.source, { force: true });
+          if (data.source === "groq") {
+            syncSupabase(records, prediction, data.source, { force: true });
+          }
           lastAiResult = data;
           return data;
         } catch (error) {
