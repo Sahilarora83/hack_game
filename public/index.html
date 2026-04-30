@@ -122,6 +122,33 @@
         background: #16a34a;
         box-shadow: 0 0 0 4px rgba(22, 163, 74, 0.14);
       }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 14px;
+      }
+
+      th,
+      td {
+        border-bottom: 1px solid #e5ebf3;
+        padding: 10px 8px;
+        text-align: left;
+      }
+
+      th {
+        color: #5d6678;
+      }
+
+      .ok {
+        color: #15803d;
+        font-weight: 700;
+      }
+
+      .bad {
+        color: #b91c1c;
+        font-weight: 700;
+      }
     </style>
   </head>
   <body>
@@ -173,6 +200,30 @@
       </section>
 
       <section class="card" style="margin-top: 14px">
+        <div class="label">Prediction Accuracy</div>
+        <div id="accuracy" class="value">Waiting...</div>
+        <div id="accuracyDetail" class="reason">Next issue result aate hi prediction auto-check hogi.</div>
+      </section>
+
+      <section class="card" style="margin-top: 14px">
+        <div class="label">Prediction History</div>
+        <div style="overflow-x: auto">
+          <table>
+            <thead>
+              <tr>
+                <th>Issue</th>
+                <th>Predicted</th>
+                <th>Actual</th>
+                <th>Range</th>
+                <th>Number</th>
+              </tr>
+            </thead>
+            <tbody id="predictionHistory"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="card" style="margin-top: 14px">
         <div class="label">Full Analysis</div>
         <pre id="analysis">Waiting for data...</pre>
       </section>
@@ -187,6 +238,7 @@
       const recentWindow = 20;
       const pollMs = 3_000;
       const storageKey = "wingo-browser-history-v1";
+      const predictionStorageKey = "wingo-prediction-history-v1";
       let lastAiIssue = null;
       let lastAiResult = null;
 
@@ -232,12 +284,113 @@
         localStorage.setItem(storageKey, JSON.stringify(records.slice(0, targetRecords)));
       }
 
+      function loadPredictionHistory() {
+        try {
+          const stored = JSON.parse(localStorage.getItem(predictionStorageKey) || "[]");
+          return Array.isArray(stored) ? stored : [];
+        } catch {
+          return [];
+        }
+      }
+
+      function savePredictionHistory(history) {
+        localStorage.setItem(predictionStorageKey, JSON.stringify(history.slice(0, 200)));
+      }
+
       function nextIssueNumber(issueNumber) {
         try {
           return (BigInt(issueNumber) + 1n).toString();
         } catch {
           return "-";
         }
+      }
+
+      function rememberPrediction(latestIssue, prediction, source) {
+        const issueNumber = nextIssueNumber(latestIssue);
+        if (!issueNumber || issueNumber === "-") return;
+        if (!prediction?.predictedRange || !Number.isInteger(Number(prediction.predictedNumber))) {
+          return;
+        }
+
+        const history = loadPredictionHistory();
+        const existingIndex = history.findIndex((entry) => entry.issueNumber === issueNumber);
+        const entry = {
+          issueNumber,
+          predictedRange: prediction.predictedRange,
+          predictedNumber: Number(prediction.predictedNumber),
+          topNumbers: Array.isArray(prediction.topNumbers) ? prediction.topNumbers.slice(0, 2) : [],
+          confidence: prediction.confidence || "Low",
+          source: source || "local",
+          createdAt: new Date().toISOString(),
+          status: "pending",
+        };
+
+        if (existingIndex >= 0 && history[existingIndex].status === "graded") return;
+        if (existingIndex >= 0) history[existingIndex] = { ...history[existingIndex], ...entry };
+        else history.unshift(entry);
+
+        savePredictionHistory(history);
+        renderPredictionHistory(history);
+      }
+
+      function gradePredictionHistory(records) {
+        const actualByIssue = new Map(records.map((record) => [record.issueNumber, record]));
+        const history = loadPredictionHistory().map((entry) => {
+          const actual = actualByIssue.get(entry.issueNumber);
+          if (!actual) return entry;
+
+          const actualRange = sizeOf(actual.number);
+          return {
+            ...entry,
+            actualNumber: actual.number,
+            actualRange,
+            rangeCorrect: entry.predictedRange === actualRange,
+            numberCorrect: Number(entry.predictedNumber) === actual.number,
+            status: "graded",
+          };
+        });
+
+        savePredictionHistory(history);
+        renderPredictionHistory(history);
+      }
+
+      function renderPredictionHistory(history = loadPredictionHistory()) {
+        const graded = history.filter((entry) => entry.status === "graded");
+        const total = graded.length;
+        const rangeCorrect = graded.filter((entry) => entry.rangeCorrect).length;
+        const numberCorrect = graded.filter((entry) => entry.numberCorrect).length;
+
+        document.querySelector("#accuracy").textContent = total
+          ? `${Math.round((rangeCorrect / total) * 100)}% range`
+          : "Waiting...";
+        document.querySelector("#accuracyDetail").textContent = total
+          ? `Checked ${total}. Exact number accuracy: ${Math.round((numberCorrect / total) * 100)}%.`
+          : "Next issue result aate hi prediction auto-check hogi.";
+
+        document.querySelector("#predictionHistory").innerHTML = history
+          .slice(0, 12)
+          .map((entry) => {
+            const actual = entry.status === "graded"
+              ? `${entry.actualNumber} ${entry.actualRange}`
+              : "Pending";
+            const rangeMark = entry.status === "graded"
+              ? `<span class="${entry.rangeCorrect ? "ok" : "bad"}">${entry.rangeCorrect ? "OK" : "Wrong"}</span>`
+              : "-";
+            const numberMark = entry.status === "graded"
+              ? `<span class="${entry.numberCorrect ? "ok" : "bad"}">${entry.numberCorrect ? "OK" : "Wrong"}</span>`
+              : "-";
+
+            return `
+              <tr>
+                <td>${entry.issueNumber}</td>
+                <td>${entry.predictedNumber} ${entry.predictedRange}</td>
+                <td>${actual}</td>
+                <td>${rangeMark}</td>
+                <td>${numberMark}</td>
+              </tr>
+            `;
+          })
+          .join("");
       }
 
       function sizeOf(number) {
@@ -508,6 +661,7 @@
 
           const prediction = data.prediction || {};
           applyPrimaryPrediction(prediction, data.source, prediction.reason || data.warning);
+          rememberPrediction(records[0]?.issueNumber, prediction, data.source);
           lastAiResult = data;
           return data;
         } catch (error) {
@@ -579,6 +733,8 @@
           ? `Sample data: ${data.warning}`
           : `Updated ${new Date(data.updatedAt).toLocaleTimeString()} (${data.source})`;
 
+        gradePredictionHistory(data.records || []);
+        rememberPrediction(data.latestIssue, data.prediction, "local");
         loadAiPrediction(data.records || data.prediction.recentResults);
       }
 
@@ -608,6 +764,7 @@
       }
 
       refreshButton.addEventListener("click", loadPrediction);
+      renderPredictionHistory();
       loadPrediction();
       setInterval(loadPrediction, pollMs);
     </script>
