@@ -116,6 +116,103 @@
     <script>
       const refreshButton = document.querySelector("#refresh");
       const statusEl = document.querySelector("#status");
+      const publicHistoryUrl =
+        "https://draw.ar-lottery01.com/WinGo/WinGo_30S/GetHistoryIssuePage.json";
+
+      function normalizeRecord(raw) {
+        const number = Number(raw.number);
+        if (!raw.issueNumber || !Number.isInteger(number) || number < 0 || number > 9) {
+          return null;
+        }
+        return {
+          issueNumber: String(raw.issueNumber),
+          number,
+          color: String(raw.color || "unknown"),
+        };
+      }
+
+      function extractRecords(payload) {
+        const possibleLists = [payload?.data?.list, payload?.list, payload?.data, payload];
+        const list = possibleLists.find(Array.isArray);
+        if (!list) throw new Error("No history list found in response");
+        return list.map(normalizeRecord).filter(Boolean);
+      }
+
+      function sizeOf(number) {
+        return number >= 5 ? "Big" : "Small";
+      }
+
+      function frequency(records) {
+        const counts = Object.fromEntries([...Array(10).keys()].map((n) => [n, 0]));
+        records.forEach((record) => {
+          counts[record.number] += 1;
+        });
+        return counts;
+      }
+
+      function analyzeClient(records) {
+        const counts = { Big: 0, Small: 0 };
+        records.forEach((record) => {
+          counts[sizeOf(record.number)] += 1;
+        });
+        return {
+          totalRecords: records.length,
+          frequency: frequency(records),
+          bigSmall: {
+            counts,
+            ratio: {
+              Big: Number((counts.Big / records.length).toFixed(3)),
+              Small: Number((counts.Small / records.length).toFixed(3)),
+            },
+          },
+        };
+      }
+
+      function predictClient(records) {
+        const recent = records.slice(0, 20);
+        const recentFrequency = frequency(recent);
+        const bigCount = recent.filter((record) => record.number >= 5).length;
+        const predictedRange = bigCount >= recent.length - bigCount ? "Big" : "Small";
+        const rangeNumbers = predictedRange === "Big" ? [5, 6, 7, 8, 9] : [0, 1, 2, 3, 4];
+        const topNumbers = rangeNumbers
+          .sort((a, b) => recentFrequency[b] - recentFrequency[a])
+          .slice(0, 2);
+        return {
+          predictedRange,
+          rangeLabel: predictedRange === "Big" ? "5-9" : "0-4",
+          topNumbers,
+        };
+      }
+
+      async function loadBrowserLiveData() {
+        const response = await fetch(`${publicHistoryUrl}?ts=${Date.now()}`, {
+          cache: "no-store",
+        });
+        const payload = await response.json();
+        const records = extractRecords(payload);
+        return {
+          appVersion: "browser-live-fallback",
+          updatedAt: new Date().toISOString(),
+          latestIssue: records[0]?.issueNumber,
+          source: "browser-live",
+          warning: "Vercel server was blocked by upstream, so this data was fetched from your browser.",
+          analysis: analyzeClient(records),
+          prediction: predictClient(records),
+        };
+      }
+
+      function renderData(data) {
+        document.querySelector("#prediction").textContent =
+          `${data.prediction.predictedRange} (${data.prediction.rangeLabel})`;
+        document.querySelector("#numbers").textContent =
+          data.prediction.topNumbers.join(", ");
+        document.querySelector("#issue").textContent = data.latestIssue;
+        document.querySelector("#records").textContent = data.analysis.totalRecords;
+        document.querySelector("#analysis").textContent = JSON.stringify(data, null, 2);
+        statusEl.textContent = data.warning && data.source !== "browser-live"
+          ? `Sample data: ${data.warning}`
+          : `Updated ${new Date(data.updatedAt).toLocaleTimeString()} (${data.source})`;
+      }
 
       async function loadPrediction() {
         refreshButton.disabled = true;
@@ -129,18 +226,17 @@
             throw new Error(data.error || "Request failed");
           }
 
-          document.querySelector("#prediction").textContent =
-            `${data.prediction.predictedRange} (${data.prediction.rangeLabel})`;
-          document.querySelector("#numbers").textContent =
-            data.prediction.topNumbers.join(", ");
-          document.querySelector("#issue").textContent = data.latestIssue;
-          document.querySelector("#records").textContent = data.analysis.totalRecords;
-          document.querySelector("#analysis").textContent = JSON.stringify(data, null, 2);
-          statusEl.textContent = data.warning
-            ? `Sample data: ${data.warning}`
-            : `Updated ${new Date(data.updatedAt).toLocaleTimeString()}`;
+          if (data.source === "sample" && data.warning?.includes("403")) {
+            renderData(await loadBrowserLiveData());
+          } else {
+            renderData(data);
+          }
         } catch (error) {
-          statusEl.textContent = error.message;
+          try {
+            renderData(await loadBrowserLiveData());
+          } catch {
+            statusEl.textContent = error.message;
+          }
         } finally {
           refreshButton.disabled = false;
         }

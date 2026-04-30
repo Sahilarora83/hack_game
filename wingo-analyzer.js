@@ -27,6 +27,7 @@ const STORE_FILE = path.join(__dirname, "wingo-history.json");
 const POLL_MS = Number(process.env.WINGO_POLL_MS || 30_000);
 const TARGET_RECORDS = Number(process.env.WINGO_TARGET_RECORDS || 500);
 const RECENT_WINDOW = 20;
+const APP_VERSION = "2026-04-30-live-browser-fallback";
 
 function normalizeRecord(raw) {
   const number = Number(raw.number);
@@ -352,6 +353,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  APP_VERSION,
   analyze,
   buildInitialDataset,
   calculateBigSmallRatio,

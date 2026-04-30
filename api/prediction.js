@@ -1,6 +1,12 @@
 const fs = require("fs/promises");
 const path = require("path");
-const { analyze, extractRecords, fetchDataset, predict } = require("../wingo-analyzer");
+const {
+  APP_VERSION,
+  analyze,
+  extractRecords,
+  fetchDataset,
+  predict,
+} = require("../wingo-analyzer");
 
 async function loadBundledSample() {
   const samplePath = path.join(process.cwd(), "GetHistoryIssuePage.json");
@@ -41,6 +47,7 @@ module.exports = async function handler(req, res) {
     }
 
     return res.status(200).json({
+      appVersion: APP_VERSION,
       updatedAt: new Date().toISOString(),
       latestIssue: records[0]?.issueNumber,
       source: warning ? "sample" : "live",
