@@ -148,6 +148,20 @@ function buildAccuracyFeedback(history) {
   };
 }
 
+function retryAfterMsFromError(error) {
+  const status = error?.status || error?.response?.status;
+  const retryHeader = error?.headers?.["retry-after"] || error?.response?.headers?.["retry-after"];
+  const retrySeconds = Number(retryHeader);
+  if (Number.isFinite(retrySeconds) && retrySeconds > 0) {
+    return Math.ceil(retrySeconds * 1000);
+  }
+
+  const message = String(error?.message || "");
+  const match = message.match(/try again in\s+([\d.]+)s/i);
+  if (match) return Math.ceil(Number(match[1]) * 1000);
+  return status === 429 ? 60_000 : null;
+}
+
 module.exports = async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -247,10 +261,14 @@ module.exports = async function handler(req, res) {
       },
     });
   } catch (error) {
+    const retryAfterMs = retryAfterMsFromError(error);
     return res.status(200).json({
       source: "local-fallback",
       prediction: fallbackPrediction(records),
-      warning: `Groq request failed: ${error.message}`,
+      warning: retryAfterMs
+        ? `Groq rate limit hit. AI will retry after ${Math.ceil(retryAfterMs / 1000)} seconds.`
+        : `Groq request failed: ${error.message}`,
+      retryAfterMs,
     });
   }
 };

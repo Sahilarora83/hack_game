@@ -310,11 +310,12 @@
       const pollMs = 3_000;
       const storageKey = "wingo-browser-history-v1";
       const predictionStorageKey = "wingo-prediction-history-v1";
-      const aiMinIntervalMs = 10_000;
+      const aiMinIntervalMs = 30_000;
       const bulkSyncIntervalMs = 60_000;
       let lastAiResult = null;
       let lastAiTargetIssue = null;
       let lastAiCallAt = 0;
+      let aiCooldownUntil = 0;
       let lastSupabaseSyncAt = 0;
       let lastSupabaseIssue = null;
       let lastBulkSyncAt = 0;
@@ -604,7 +605,13 @@
       }
 
       function shouldAskGroq(records, localPrediction) {
-        return Date.now() - lastAiCallAt >= aiMinIntervalMs;
+        const now = Date.now();
+        return now >= aiCooldownUntil && now - lastAiCallAt >= aiMinIntervalMs;
+      }
+
+      function setAiCooldown(milliseconds) {
+        if (!Number.isFinite(milliseconds) || milliseconds <= 0) return;
+        aiCooldownUntil = Date.now() + Math.max(milliseconds, aiMinIntervalMs);
       }
 
       function decideAction(prediction) {
@@ -878,9 +885,12 @@
 
         const localPrediction = predictClient(records);
         if (!shouldAskGroq(records, localPrediction)) {
+          const waitSeconds = Math.max(
+            1,
+            Math.ceil((Math.max(aiCooldownUntil, lastAiCallAt + aiMinIntervalMs) - Date.now()) / 1000)
+          );
           document.querySelector("#aiReason").textContent =
-            "Groq full-time mode: next AI analysis in a few seconds.";
-          rememberPrediction(records[0]?.issueNumber, localPrediction, "local");
+            `Groq cooldown: next AI analysis in ${waitSeconds}s.`;
           return null;
         }
 
@@ -893,8 +903,8 @@
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              records: records.slice(0, 120),
-              predictionHistory: loadPredictionHistory().slice(0, 40),
+              records: records.slice(0, 80),
+              predictionHistory: loadPredictionHistory().slice(0, 20),
             }),
           });
           const data = await response.json();
@@ -907,13 +917,20 @@
           const displayReason = data.source === "groq"
             ? (prediction.reason || data.warning)
             : (data.warning || prediction.reason);
-          applyPrimaryPrediction(prediction, data.source, displayReason);
-          rememberPrediction(records[0]?.issueNumber, prediction, data.source);
           if (data.source === "groq") {
+            applyPrimaryPrediction(prediction, data.source, displayReason);
+            rememberPrediction(records[0]?.issueNumber, prediction, data.source);
             syncSupabase(records, prediction, data.source, { force: true });
+            lastAiResult = data;
+            lastAiTargetIssue = nextIssueNumber(records[0]?.issueNumber);
+          } else {
+            setAiCooldown(Number(data.retryAfterMs) || 60_000);
+            document.querySelector("#aiPrediction").textContent = "AI cooldown";
+            document.querySelector("#aiReason").textContent =
+              displayReason || "Groq limit hit. Local standby active.";
+            document.querySelector("#reason").textContent =
+              "Groq cooldown active hai; next tracked prediction AI se aayegi.";
           }
-          lastAiResult = data;
-          lastAiTargetIssue = nextIssueNumber(records[0]?.issueNumber);
           return data;
         } catch (error) {
           document.querySelector("#aiReason").textContent = error.message;
