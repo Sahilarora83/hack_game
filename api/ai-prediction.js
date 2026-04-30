@@ -1,6 +1,6 @@
 const Groq = require("groq-sdk");
 
-const MODEL = "openai/gpt-oss-120b";
+const MODEL = "llama-3.1-8b-instant";
 
 function sanitizeRecords(records) {
   if (!Array.isArray(records)) return [];
@@ -96,7 +96,6 @@ module.exports = async function handler(req, res) {
       temperature: 0.4,
       max_completion_tokens: 700,
       top_p: 1,
-      reasoning_effort: "medium",
       response_format: { type: "json_object" },
     });
 
