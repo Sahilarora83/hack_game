@@ -96,10 +96,10 @@ module.exports = async function handler(req, res) {
 
   try {
     const results = Array.isArray(req.body?.results)
-      ? req.body.results.map(normalizeResult).filter(Boolean).slice(0, 120)
+      ? req.body.results.map(normalizeResult).filter(Boolean)
       : [];
     const predictions = Array.isArray(req.body?.predictions)
-      ? req.body.predictions.map(normalizePrediction).filter(Boolean).slice(0, 50)
+      ? req.body.predictions.map(normalizePrediction).filter(Boolean)
       : [];
 
     if (results.length) {

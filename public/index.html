@@ -326,6 +326,14 @@
         localStorage.setItem(aiCacheKey, JSON.stringify(Object.fromEntries(entries)));
       }
 
+      function chunkArray(items, size) {
+        const chunks = [];
+        for (let i = 0; i < items.length; i += size) {
+          chunks.push(items.slice(i, i + size));
+        }
+        return chunks;
+      }
+
       function nextIssueNumber(issueNumber) {
         try {
           return (BigInt(issueNumber) + 1n).toString();
@@ -460,15 +468,28 @@
           : []);
 
         try {
-          const response = await fetch("/api/supabase-sync", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              results: results || [],
-              predictions,
-            }),
-          });
-          return await response.json();
+          let syncedResults = 0;
+          let syncedPredictions = 0;
+          const resultChunks = chunkArray(results || [], 100);
+          const predictionChunks = chunkArray(predictions || [], 100);
+          const totalChunks = Math.max(resultChunks.length, predictionChunks.length, 1);
+
+          for (let i = 0; i < totalChunks; i += 1) {
+            const response = await fetch("/api/supabase-sync", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                results: resultChunks[i] || [],
+                predictions: predictionChunks[i] || [],
+              }),
+            });
+            const data = await response.json();
+            if (!data.ok) return data;
+            syncedResults += data.syncedResults || 0;
+            syncedPredictions += data.syncedPredictions || 0;
+          }
+
+          return { ok: true, syncedResults, syncedPredictions };
         } catch {
           // Local dashboard should keep working even if DB sync is unavailable.
           return null;
