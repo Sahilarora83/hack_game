@@ -317,7 +317,7 @@
       const pollMs = 1_000;
       const storageKey = "wingo-browser-history-v1";
       const predictionStorageKey = "wingo-prediction-history-v1";
-      const aiMinIntervalMs = 30_000;
+      const aiMinIntervalMs = 5_000;
       const bulkSyncIntervalMs = 60_000;
       let lastAiResult = null;
       let lastAiTargetIssue = null;
@@ -1045,8 +1045,8 @@
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              records: records.slice(0, 80),
-              predictionHistory: loadPredictionHistory().slice(0, 20),
+              records: records.slice(0, 50),
+              predictionHistory: loadPredictionHistory().slice(0, 12),
             }),
           });
           const data = await response.json();

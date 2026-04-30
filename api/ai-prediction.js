@@ -20,7 +20,7 @@ function sanitizeRecords(records) {
       };
     })
     .filter(Boolean)
-    .slice(0, 500);
+    .slice(0, 80);
 }
 
 function sanitizePredictionHistory(history) {
@@ -40,7 +40,7 @@ function sanitizePredictionHistory(history) {
       status: entry.status || "pending",
     }))
     .filter((entry) => entry.issueNumber && Number.isInteger(entry.predictedNumber))
-    .slice(0, 120);
+    .slice(0, 40);
 }
 
 function fallbackPrediction(records) {
@@ -68,7 +68,7 @@ function fallbackPrediction(records) {
 function buildSummary(records) {
   const recent10 = records.slice(0, 10);
   const recent20 = records.slice(0, 20);
-  const recent50 = records.slice(0, 50);
+  const recent40 = records.slice(0, 40);
   const allFrequency = Object.fromEntries([...Array(10).keys()].map((number) => [number, 0]));
   const frequency = Object.fromEntries([...Array(10).keys()].map((number) => [number, 0]));
   const sizeCounts = { Big: 0, Small: 0 };
@@ -96,7 +96,7 @@ function buildSummary(records) {
     latestNumber: records[0]?.number,
     latestSize,
     recent10: recent10.map((record) => `${record.number}-${record.size[0]}`),
-    recent50Sequence: recent50.map((record) => record.number).join(""),
+    recent40Sequence: recent40.map((record) => record.number).join(""),
     recent20Frequency: frequency,
     recent20SizeCounts: sizeCounts,
     allFrequency,
@@ -108,7 +108,7 @@ function buildSummary(records) {
 
 function compactHistory(history) {
   return history
-    .slice(0, 30)
+    .slice(0, 12)
     .map((entry) => ({
       i: entry.issueNumber.slice(-4),
       p: `${entry.predictedNumber}${entry.predictedRange[0]}`,
@@ -228,7 +228,7 @@ module.exports = async function handler(req, res) {
         },
       ],
       temperature: 0.2,
-      max_completion_tokens: 350,
+      max_completion_tokens: 220,
       top_p: 1,
       response_format: { type: "json_object" },
     });
