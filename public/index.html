@@ -122,6 +122,10 @@
         opacity: 0.7;
       }
 
+      .secondary-button {
+        background: #64748b;
+      }
+
       .live-dot {
         display: inline-block;
         width: 8px;
@@ -213,6 +217,7 @@
       <div class="actions">
         <button id="refresh">Refresh</button>
         <button id="syncDb" type="button">Sync DB</button>
+        <button id="clearHistory" class="secondary-button" type="button">Clear History</button>
         <span id="status" class="muted">Loading...</span><span class="live-dot"></span>
       </div>
 
@@ -296,6 +301,7 @@
     <script>
       const refreshButton = document.querySelector("#refresh");
       const syncDbButton = document.querySelector("#syncDb");
+      const clearHistoryButton = document.querySelector("#clearHistory");
       const statusEl = document.querySelector("#status");
       const publicHistoryUrl =
         "https://draw.ar-lottery01.com/WinGo/WinGo_30S/GetHistoryIssuePage.json";
@@ -307,6 +313,7 @@
       const aiMinIntervalMs = 10_000;
       const bulkSyncIntervalMs = 60_000;
       let lastAiResult = null;
+      let lastAiTargetIssue = null;
       let lastAiCallAt = 0;
       let lastSupabaseSyncAt = 0;
       let lastSupabaseIssue = null;
@@ -365,6 +372,10 @@
 
       function savePredictionHistory(history) {
         localStorage.setItem(predictionStorageKey, JSON.stringify(history.slice(0, 200)));
+      }
+
+      function validTrackedHistory(history = loadPredictionHistory()) {
+        return history.filter((entry) => entry.source === "groq" && entry.action !== "SKIP");
       }
 
       function chunkArray(items, size) {
@@ -446,7 +457,8 @@
       }
 
       function renderPredictionHistory(history = loadPredictionHistory()) {
-        const graded = history.filter((entry) => entry.status === "graded" && entry.action !== "SKIP");
+        const tracked = validTrackedHistory(history);
+        const graded = tracked.filter((entry) => entry.status === "graded");
         const total = graded.length;
         const rangeCorrect = graded.filter((entry) => entry.rangeCorrect).length;
         const numberCorrect = graded.filter((entry) => entry.numberCorrect).length;
@@ -455,10 +467,10 @@
           ? `${Math.round((rangeCorrect / total) * 100)}% range`
           : "Waiting...";
         document.querySelector("#accuracyDetail").textContent = total
-          ? `Checked ${total}. Exact number accuracy: ${Math.round((numberCorrect / total) * 100)}%.`
-          : "Next issue result aate hi prediction auto-check hogi.";
+          ? `Checked ${total} Groq predictions. Exact number accuracy: ${Math.round((numberCorrect / total) * 100)}%.`
+          : "Groq prediction ka next result aate hi auto-check hoga.";
 
-        document.querySelector("#predictionHistory").innerHTML = history
+        document.querySelector("#predictionHistory").innerHTML = tracked
           .slice(0, 12)
           .map((entry) => {
             const actual = entry.status === "graded"
@@ -486,7 +498,7 @@
       }
 
       function historyToSupabasePredictions(history = loadPredictionHistory()) {
-        return history.map((entry) => ({
+        return validTrackedHistory(history).map((entry) => ({
           issueNumber: entry.issueNumber,
           previousIssueNumber: entry.previousIssueNumber || null,
           predictedNumber: entry.predictedNumber,
@@ -901,6 +913,7 @@
             syncSupabase(records, prediction, data.source, { force: true });
           }
           lastAiResult = data;
+          lastAiTargetIssue = nextIssueNumber(records[0]?.issueNumber);
           return data;
         } catch (error) {
           document.querySelector("#aiReason").textContent = error.message;
@@ -947,26 +960,29 @@
       function renderData(data) {
         const localDecision = decideAction(data.prediction);
         data.prediction.action = localDecision.action;
-        document.querySelector("#prediction").textContent =
-          `${data.prediction.predictedRange} (${data.prediction.rangeLabel})`;
-        document.querySelector("#predictionSource").textContent =
-          "Instant local fallback while Groq AI checks the next issue.";
-        document.querySelector("#predictedNumber").textContent =
-          data.prediction.predictedNumber ?? data.prediction.topNumbers[0] ?? "-";
-        document.querySelector("#numbers").textContent =
-          data.prediction.topNumbers.join(", ");
+        const nextIssue = nextIssueNumber(data.latestIssue);
+        const hasFreshAiPrediction = lastAiResult && lastAiTargetIssue === nextIssue;
+        if (!hasFreshAiPrediction) {
+          document.querySelector("#prediction").textContent = "Waiting for Groq";
+          document.querySelector("#predictionSource").textContent =
+            "Local standby ready hai; main prediction Groq se update hogi.";
+          document.querySelector("#predictedNumber").textContent = "-";
+          document.querySelector("#numbers").textContent = "-";
+        }
         document.querySelector("#issue").textContent = data.latestIssue;
         document.querySelector("#latestNumber").textContent =
           data.records?.[0]
             ? `Number: ${data.records[0].number} (${data.records[0].number >= 5 ? "Big" : "Small"})`
             : "Number: -";
         document.querySelector("#nextIssue").textContent =
-          `Next issue: ${nextIssueNumber(data.latestIssue)}`;
+          `Next issue: ${nextIssue}`;
         document.querySelector("#records").textContent = data.analysis.totalRecords;
-        document.querySelector("#confidence").textContent = data.prediction.confidence || "-";
-        document.querySelector("#reason").textContent = data.prediction.reason || "-";
-        document.querySelector("#action").textContent = localDecision.action;
-        document.querySelector("#actionReason").textContent = localDecision.reason;
+        if (!hasFreshAiPrediction) {
+          document.querySelector("#confidence").textContent = "-";
+          document.querySelector("#reason").textContent = "Waiting for Groq AI signal.";
+          document.querySelector("#action").textContent = "WAIT";
+          document.querySelector("#actionReason").textContent = "Groq result aane do; local fallback track nahi hota.";
+        }
         document.querySelector("#lastResults").innerHTML = (data.prediction.recentResults || [])
           .map((result) => (
             `<div class="result-pill ${result.size.toLowerCase()}" title="${result.issueNumber}">
@@ -1012,6 +1028,11 @@
 
       refreshButton.addEventListener("click", loadPrediction);
       syncDbButton.addEventListener("click", syncAllToSupabase);
+      clearHistoryButton.addEventListener("click", () => {
+        savePredictionHistory([]);
+        renderPredictionHistory([]);
+        statusEl.textContent = "Prediction history cleared.";
+      });
       renderPredictionHistory();
       loadPrediction();
       setInterval(loadPrediction, pollMs);
