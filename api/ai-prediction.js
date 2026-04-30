@@ -20,6 +20,26 @@ function sanitizeRecords(records) {
       };
     })
     .filter(Boolean)
+    .slice(0, 500);
+}
+
+function sanitizePredictionHistory(history) {
+  if (!Array.isArray(history)) return [];
+
+  return history
+    .map((entry) => ({
+      issueNumber: String(entry.issueNumber || ""),
+      predictedNumber: Number(entry.predictedNumber),
+      predictedRange: entry.predictedRange === "Big" ? "Big" : "Small",
+      actualNumber: entry.actualNumber === undefined ? null : Number(entry.actualNumber),
+      actualRange: entry.actualRange || null,
+      rangeCorrect: Boolean(entry.rangeCorrect),
+      numberCorrect: Boolean(entry.numberCorrect),
+      action: entry.action || "TRACK",
+      source: entry.source || "local",
+      status: entry.status || "pending",
+    }))
+    .filter((entry) => entry.issueNumber && Number.isInteger(entry.predictedNumber))
     .slice(0, 120);
 }
 
@@ -75,6 +95,36 @@ function buildSummary(records) {
   };
 }
 
+function buildAccuracyFeedback(history) {
+  const graded = history.filter((entry) => entry.status === "graded");
+  const recent = graded.slice(0, 40);
+  const byRange = { Big: { ok: 0, total: 0 }, Small: { ok: 0, total: 0 } };
+  const exactMisses = {};
+
+  for (const entry of recent) {
+    byRange[entry.predictedRange].total += 1;
+    if (entry.rangeCorrect) byRange[entry.predictedRange].ok += 1;
+
+    const key = `${entry.predictedNumber}->${entry.actualNumber}`;
+    exactMisses[key] = (exactMisses[key] || 0) + 1;
+  }
+
+  return {
+    checked: graded.length,
+    recentChecked: recent.length,
+    recentRangeAccuracy: recent.length
+      ? Number((recent.filter((entry) => entry.rangeCorrect).length / recent.length).toFixed(3))
+      : null,
+    recentExactAccuracy: recent.length
+      ? Number((recent.filter((entry) => entry.numberCorrect).length / recent.length).toFixed(3))
+      : null,
+    byPredictedRange: byRange,
+    commonExactMisses: Object.entries(exactMisses)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 8),
+  };
+}
+
 module.exports = async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -89,6 +139,7 @@ module.exports = async function handler(req, res) {
   }
 
   const records = sanitizeRecords(req.body?.records);
+  const predictionHistory = sanitizePredictionHistory(req.body?.predictionHistory);
 
   if (records.length < 5) {
     return res.status(400).json({ error: "At least 5 valid records are required." });
@@ -105,6 +156,7 @@ module.exports = async function handler(req, res) {
   try {
     const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
     const summary = buildSummary(records);
+    const accuracyFeedback = buildAccuracyFeedback(predictionHistory);
     const completion = await groq.chat.completions.create({
       model: MODEL,
       messages: [
@@ -113,6 +165,7 @@ module.exports = async function handler(req, res) {
           content:
             "You analyze WinGo public history data for statistical pattern exploration only. " +
             "Predict only the immediate next issue after the latest issue. " +
+            "Use both older records and newest records. Use prior prediction history as feedback and avoid repeating patterns that were recently wrong. " +
             "Do not claim certainty, do not encourage betting, and return strict JSON only. " +
             "Never copy the already known latest result as the prediction.",
         },
@@ -125,9 +178,15 @@ module.exports = async function handler(req, res) {
             "confidence ('Low', 'Medium', or 'High'), reason (short Hinglish explanation). " +
             "predictedNumber and topNumbers must belong inside the predictedRange. " +
             "Use recent 10-20 results, frequency, missing numbers, current streak, and Big/Small transitions. " +
+            "Also compare with older records and prior wrong predictions in AccuracyFeedback. " +
+            "If one side has been over-predicted and recently wrong, reduce its weight. " +
             "If signals conflict, choose Low confidence and explain the conflict. " +
             "Return JSON only.\n\nSummary:\n" +
             JSON.stringify(summary) +
+            "\n\nAccuracyFeedback:\n" +
+            JSON.stringify(accuracyFeedback) +
+            "\n\nRecentPredictionHistory:\n" +
+            JSON.stringify(predictionHistory.slice(0, 60)) +
             "\n\nRecords:\n" +
             JSON.stringify(records),
         },

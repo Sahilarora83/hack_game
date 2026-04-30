@@ -787,7 +787,7 @@
           latestIssue: records[0]?.issueNumber,
           source: "browser-live",
           warning: "Vercel server was blocked by upstream, so this data was fetched from your browser.",
-          records: records.slice(0, 120),
+          records: records.slice(0, 500),
           analysis,
           prediction: predictClient(records),
         };
@@ -812,7 +812,10 @@
           const response = await fetch("/api/ai-prediction", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ records }),
+            body: JSON.stringify({
+              records: records.slice(0, 500),
+              predictionHistory: loadPredictionHistory().slice(0, 120),
+            }),
           });
           const data = await response.json();
 
