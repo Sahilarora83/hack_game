@@ -44,6 +44,36 @@ function fallbackPrediction(records) {
   };
 }
 
+function buildSummary(records) {
+  const recent10 = records.slice(0, 10);
+  const recent20 = records.slice(0, 20);
+  const frequency = Object.fromEntries([...Array(10).keys()].map((number) => [number, 0]));
+  const sizeCounts = { Big: 0, Small: 0 };
+
+  recent20.forEach((record) => {
+    frequency[record.number] += 1;
+    sizeCounts[record.size] += 1;
+  });
+
+  let sizeStreak = 0;
+  const latestSize = records[0]?.size;
+  for (const record of records) {
+    if (record.size === latestSize) sizeStreak += 1;
+    else break;
+  }
+
+  return {
+    latestIssue: records[0]?.issueNumber,
+    latestNumber: records[0]?.number,
+    latestSize,
+    recent10: recent10.map((record) => `${record.number}-${record.size[0]}`),
+    recent20Frequency: frequency,
+    recent20SizeCounts: sizeCounts,
+    currentSizeStreak: latestSize ? `${latestSize} x${sizeStreak}` : "none",
+    totalRecordsProvided: records.length,
+  };
+}
+
 module.exports = async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -73,6 +103,7 @@ module.exports = async function handler(req, res) {
 
   try {
     const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+    const summary = buildSummary(records);
     const completion = await groq.chat.completions.create({
       model: MODEL,
       messages: [
@@ -80,7 +111,9 @@ module.exports = async function handler(req, res) {
           role: "system",
           content:
             "You analyze WinGo public history data for statistical pattern exploration only. " +
-            "Do not claim certainty, do not encourage betting, and return strict JSON only.",
+            "Predict only the immediate next issue after the latest issue. " +
+            "Do not claim certainty, do not encourage betting, and return strict JSON only. " +
+            "Never copy the already known latest result as the prediction.",
         },
         {
           role: "user",
@@ -88,12 +121,16 @@ module.exports = async function handler(req, res) {
             "Given these newest-first records, produce one JSON object with keys: " +
             "predictedRange ('Small' or 'Big'), rangeLabel ('0-4' or '5-9'), " +
             "topNumbers (array of exactly two integers), confidence ('Low', 'Medium', or 'High'), " +
-            "reason (short Hinglish explanation). Use streaks, recent 10-20 results, " +
-            "frequency, missing numbers, and Big/Small transitions. Keep confidence Low when data is weak.\n\n" +
+            "reason (short Hinglish explanation). topNumbers must belong inside the predictedRange. " +
+            "Use recent 10-20 results, frequency, missing numbers, current streak, and Big/Small transitions. " +
+            "If signals conflict, choose Low confidence and explain the conflict. " +
+            "Return JSON only.\n\nSummary:\n" +
+            JSON.stringify(summary) +
+            "\n\nRecords:\n" +
             JSON.stringify(records),
         },
       ],
-      temperature: 0.4,
+      temperature: 0.2,
       max_completion_tokens: 700,
       top_p: 1,
       response_format: { type: "json_object" },
@@ -101,11 +138,24 @@ module.exports = async function handler(req, res) {
 
     const content = completion.choices?.[0]?.message?.content || "{}";
     const prediction = JSON.parse(content);
+    const normalizedRange = prediction.predictedRange === "Big" ? "Big" : "Small";
+    const allowedNumbers = normalizedRange === "Big" ? [5, 6, 7, 8, 9] : [0, 1, 2, 3, 4];
+    const topNumbers = Array.isArray(prediction.topNumbers)
+      ? prediction.topNumbers.map(Number).filter((number) => allowedNumbers.includes(number))
+      : [];
 
     return res.status(200).json({
       source: "groq",
       model: MODEL,
-      prediction,
+      prediction: {
+        predictedRange: normalizedRange,
+        rangeLabel: normalizedRange === "Big" ? "5-9" : "0-4",
+        topNumbers: [...topNumbers, ...allowedNumbers].slice(0, 2),
+        confidence: ["Low", "Medium", "High"].includes(prediction.confidence)
+          ? prediction.confidence
+          : "Low",
+        reason: prediction.reason || "Groq analyzed recent public history signals.",
+      },
     });
   } catch (error) {
     return res.status(200).json({

@@ -496,8 +496,15 @@
               .slice(0, 2)
               .join(", ");
           }
+          if (prediction.predictedRange && prediction.rangeLabel) {
+            document.querySelector("#prediction").textContent =
+              `${prediction.predictedRange} (${prediction.rangeLabel})`;
+          }
           if (prediction.confidence) {
             document.querySelector("#confidence").textContent = prediction.confidence;
+          }
+          if (prediction.reason) {
+            document.querySelector("#reason").textContent = `AI primary: ${prediction.reason}`;
           }
         } catch (error) {
           document.querySelector("#aiReason").textContent = error.message;
