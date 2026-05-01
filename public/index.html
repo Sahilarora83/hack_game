@@ -126,6 +126,10 @@
         background: #64748b;
       }
 
+      .apk-button {
+        background: #111827;
+      }
+
       .live-dot {
         display: inline-block;
         width: 8px;
@@ -231,6 +235,7 @@
       <div class="actions">
         <button id="refresh">Refresh</button>
         <button id="syncDb" type="button">Sync DB</button>
+        <button id="apkStrategy" class="apk-button" type="button">APK Algo</button>
         <button id="restoreHistory" class="secondary-button" type="button">Restore DB History</button>
         <button id="clearHistory" class="secondary-button" type="button">Clear Local History</button>
         <span id="status" class="muted">Loading...</span><span class="live-dot"></span>
@@ -284,6 +289,11 @@
           <div class="label">Groq AI Prediction</div>
           <div id="aiPrediction" class="value">-</div>
           <div id="aiReason" class="reason">Groq optimized: cache + throttling enabled.</div>
+        </article>
+        <article class="card">
+          <div class="label">APK Algo Result</div>
+          <div id="apkPrediction" class="value">-</div>
+          <div id="apkReason" class="reason">APK Algo button click karo.</div>
         </article>
       </section>
 
@@ -368,6 +378,7 @@
     <script>
       const refreshButton = document.querySelector("#refresh");
       const syncDbButton = document.querySelector("#syncDb");
+      const apkStrategyButton = document.querySelector("#apkStrategy");
       const restoreHistoryButton = document.querySelector("#restoreHistory");
       const clearHistoryButton = document.querySelector("#clearHistory");
       const statusEl = document.querySelector("#status");
@@ -972,6 +983,24 @@
 
       function sizeOf(number) {
         return number >= 5 ? "Big" : "Small";
+      }
+
+      function getApkStylePeriod(date = new Date()) {
+        const year = date.getUTCFullYear();
+        const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+        const day = String(date.getUTCDate()).padStart(2, "0");
+        const totalMinutes = date.getUTCHours() * 60 + date.getUTCMinutes();
+        return `${year}${month}${day}1000${10001 + totalMinutes}`;
+      }
+
+      function runApkAlgo() {
+        const number = Math.floor(Math.random() * 10);
+        const predictedRange = sizeOf(number);
+        const period = getApkStylePeriod();
+        document.querySelector("#apkPrediction").textContent = `${predictedRange} ${number}`;
+        document.querySelector("#apkReason").textContent =
+          `APK-style random output for period ${period}. 0-4 Small, 5-9 Big.`;
+        statusEl.textContent = `APK Algo generated ${predictedRange} ${number}`;
       }
 
       function frequency(records) {
@@ -1639,6 +1668,7 @@
 
       refreshButton.addEventListener("click", loadPrediction);
       syncDbButton.addEventListener("click", syncAllToSupabase);
+      apkStrategyButton.addEventListener("click", runApkAlgo);
       restoreHistoryButton.addEventListener("click", () => restoreHistoryFromSupabase({ force: true }));
       clearHistoryButton.addEventListener("click", () => {
         const ok = confirm(
