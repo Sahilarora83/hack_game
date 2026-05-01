@@ -163,6 +163,20 @@
         font-weight: 700;
       }
 
+      .table-wrap {
+        overflow-x: auto;
+      }
+
+      .strategy-badge {
+        display: inline-block;
+        border-radius: 999px;
+        padding: 3px 8px;
+        background: #eef2ff;
+        color: #3730a3;
+        font-size: 12px;
+        font-weight: 700;
+      }
+
       @media (max-width: 640px) {
         main {
           padding: 20px 12px;
@@ -280,8 +294,27 @@
       </section>
 
       <section class="card" style="margin-top: 14px">
+        <div class="label">Live Strategy Performance</div>
+        <div class="reason" id="strategySummary">Waiting for strategy backtest...</div>
+        <div class="table-wrap" style="margin-top: 10px">
+          <table>
+            <thead>
+              <tr>
+                <th>Strategy</th>
+                <th>Recent</th>
+                <th>Full</th>
+                <th>Checks</th>
+                <th>Signal</th>
+              </tr>
+            </thead>
+            <tbody id="strategyPerformance"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="card" style="margin-top: 14px">
         <div class="label">Prediction History</div>
-        <div style="overflow-x: auto">
+        <div class="table-wrap">
           <table>
             <thead>
               <tr>
@@ -548,6 +581,58 @@
           .join("");
       }
 
+      function trackedOutcomeStats(history = loadPredictionHistory(), limit = 12) {
+        const graded = validTrackedHistory(history)
+          .filter((entry) => entry.status === "graded" && entry.action !== "SKIP")
+          .slice(0, limit);
+        let wrongStreak = 0;
+        for (const entry of graded) {
+          if (entry.rangeCorrect) break;
+          wrongStreak += 1;
+        }
+        const checked = graded.length;
+        const rangeCorrect = graded.filter((entry) => entry.rangeCorrect).length;
+        return {
+          checked,
+          wrongStreak,
+          recentRangeAccuracy: checked ? rangeCorrect / checked : 0,
+        };
+      }
+
+      function renderStrategyPerformance(prediction) {
+        const alternatives = prediction?.scores?.alternatives || [];
+        const bestStrategy = prediction?.scores?.bestStrategy;
+        const voteMargin = Math.round((prediction?.scores?.voteMargin || 0) * 100);
+
+        document.querySelector("#strategySummary").textContent = alternatives.length
+          ? `Best: ${String(bestStrategy || "-").replaceAll("_", " ")}. Vote margin ${voteMargin}%. Weak strategy rows sirf observe ke liye hain.`
+          : "Strategy backtest ke liye aur records chahiye.";
+
+        document.querySelector("#strategyPerformance").innerHTML = alternatives
+          .map((score) => {
+            const recent = score.recentChecked
+              ? `${Math.round(score.recentAccuracy * 100)}%`
+              : "-";
+            const full = score.checked ? `${Math.round(score.accuracy * 100)}%` : "-";
+            const signal =
+              score.recentChecked >= 35 && score.recentAccuracy >= 0.58
+                ? '<span class="ok">Strong</span>'
+                : score.recentChecked >= 35 && score.recentAccuracy >= 0.54
+                  ? "Watch"
+                  : '<span class="muted">Weak</span>';
+            return `
+              <tr>
+                <td><span class="strategy-badge">${escapeHtml(score.strategy.replaceAll("_", " "))}</span></td>
+                <td>${recent}</td>
+                <td>${full}</td>
+                <td>${escapeHtml(score.recentChecked || 0)}/${escapeHtml(score.checked || 0)}</td>
+                <td>${signal}</td>
+              </tr>
+            `;
+          })
+          .join("");
+      }
+
       function historyToSupabasePredictions(history = loadPredictionHistory()) {
         return validTrackedHistory(history).map((entry) => ({
           issueNumber: entry.issueNumber,
@@ -716,6 +801,16 @@
       function decideAction(prediction) {
         const reason = String(prediction?.reason || "").toLowerCase();
         const conflict = reason.includes("conflict") || reason.includes("weak");
+        const outcomes = trackedOutcomeStats();
+        const recentAccuracy = Number(prediction?.scores?.recentAccuracy || 0);
+        const voteMargin = Number(prediction?.scores?.voteMargin || 0);
+
+        if (outcomes.wrongStreak >= 3) {
+          return {
+            action: "SKIP",
+            reason: `Last ${outcomes.wrongStreak} tracked range signals wrong aaye. Cooldown active hai, skip karo.`,
+          };
+        }
 
         if (prediction?.confidence === "Low" || conflict) {
           return {
@@ -726,10 +821,17 @@
           };
         }
 
-        if (prediction?.confidence === "High") {
+        if (prediction?.confidence === "Medium" && recentAccuracy < 0.54) {
+          return {
+            action: "SKIP",
+            reason: "Medium label hai, par recent strategy backtest weak hai. Skip safer hai.",
+          };
+        }
+
+        if (prediction?.confidence === "High" && recentAccuracy >= 0.59 && voteMargin >= 0.28) {
           return {
             action: "STRONG",
-            reason: "Confidence high hai, signal stronger hai.",
+            reason: "High confidence + recent backtest + vote margin align hain. Paper track only.",
           };
         }
 
@@ -1118,7 +1220,7 @@
             checked: selected.best.checked,
             recentChecked: selected.best.recentChecked,
             voteMargin: Number(selected.margin.toFixed(3)),
-            alternatives: selected.candidates.slice(0, 3),
+            alternatives: selected.candidates.slice(0, 6),
           },
         };
       }
@@ -1275,6 +1377,7 @@
         if (reason) {
           document.querySelector("#reason").textContent = `${sourceLabel}: ${reason}`;
         }
+        renderStrategyPerformance(prediction);
       }
 
       function renderData(data) {
@@ -1318,6 +1421,7 @@
             </div>`
           ))
           .join("");
+        renderStrategyPerformance(data.prediction);
         document.querySelector("#analysis").textContent = JSON.stringify({
           ...data,
           records: (data.records || []).slice(0, 40),
