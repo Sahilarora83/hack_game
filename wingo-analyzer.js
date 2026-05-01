@@ -13,6 +13,7 @@
  *   WINGO_API_URL=https://example.com/WinGo/WinGo_30S/GetHistoryIssuePage.json
  *   WINGO_POLL_MS=30000
  *   WINGO_TARGET_RECORDS=500
+ *   WINGO_STRATEGY=statistical|apk-random
  */
 
 const fs = require("fs/promises");
@@ -27,6 +28,7 @@ const STORE_FILE = path.join(__dirname, "wingo-history.json");
 const POLL_MS = Number(process.env.WINGO_POLL_MS || 30_000);
 const TARGET_RECORDS = Number(process.env.WINGO_TARGET_RECORDS || 500);
 const RECENT_WINDOW = 20;
+const STRATEGY = (process.env.WINGO_STRATEGY || "statistical").toLowerCase();
 const APP_VERSION = "2026-04-30-live-browser-fallback";
 
 function normalizeRecord(raw) {
@@ -145,6 +147,33 @@ function sizeOf(number) {
   return number >= 5 ? "Big" : "Small";
 }
 
+function getApkStylePeriod(date = new Date()) {
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
+  const totalMinutes = date.getUTCHours() * 60 + date.getUTCMinutes();
+
+  return `${year}${month}${day}1000${10001 + totalMinutes}`;
+}
+
+function apkRandomPrediction(date = new Date()) {
+  const number = Math.floor(Math.random() * 10);
+  const predictedRange = sizeOf(number);
+
+  return {
+    strategy: "apk-random",
+    period: getApkStylePeriod(date),
+    predictedRange,
+    rangeLabel: predictedRange === "Big" ? "5-9" : "0-4",
+    topNumbers: [number],
+    scores: {
+      Big: predictedRange === "Big" ? 1 : 0,
+      Small: predictedRange === "Small" ? 1 : 0,
+    },
+    note: "Matches the decompiled APK behavior: random 0-9, then Big for 5-9 and Small for 0-4.",
+  };
+}
+
 function calculateFrequency(records) {
   const frequency = Object.fromEntries([...Array(10).keys()].map((n) => [n, 0]));
 
@@ -239,6 +268,10 @@ function analyze(records) {
 }
 
 function predict(records) {
+  if (STRATEGY === "apk-random") {
+    return apkRandomPrediction();
+  }
+
   const recent = records.slice(0, RECENT_WINDOW);
   const recent10 = records.slice(0, 10);
   const analysis = analyze(records);
@@ -281,6 +314,7 @@ function predict(records) {
     .map((item) => item.number);
 
   return {
+    strategy: "statistical",
     predictedRange,
     rangeLabel: predictedRange === "Big" ? "5-9" : "0-4",
     topNumbers,
@@ -309,6 +343,10 @@ function printReport(records) {
     `Next Prediction: ${prediction.predictedRange} (${prediction.rangeLabel}), ` +
       `likely numbers: ${prediction.topNumbers.join(", ")}`
   );
+  if (prediction.period) {
+    console.log(`APK-style period: ${prediction.period}`);
+  }
+  console.log(`Strategy mode: ${prediction.strategy}`);
   console.log("Reminder: statistical analysis only; not a guaranteed prediction.\n");
 }
 
@@ -355,6 +393,7 @@ if (require.main === module) {
 module.exports = {
   APP_VERSION,
   analyze,
+  apkRandomPrediction,
   buildInitialDataset,
   calculateBigSmallRatio,
   calculateFrequency,
@@ -363,6 +402,7 @@ module.exports = {
   extractRecords,
   fetchDataset,
   fetchHistoryPage,
+  getApkStylePeriod,
   mergeRecords,
   normalizeRecord,
   predict,
