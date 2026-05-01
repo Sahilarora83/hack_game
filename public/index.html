@@ -204,7 +204,7 @@
         }
 
         table {
-          min-width: 680px;
+          min-width: 760px;
           font-size: 13px;
         }
       }
@@ -287,6 +287,7 @@
               <tr>
                 <th>Issue</th>
                 <th>Predicted</th>
+                <th>Source</th>
                 <th>Actual</th>
                 <th>Action</th>
                 <th>Range</th>
@@ -317,7 +318,7 @@
       const pollMs = 1_000;
       const storageKey = "wingo-browser-history-v1";
       const predictionStorageKey = "wingo-prediction-history-v1";
-      const aiMinIntervalMs = 5_000;
+      const aiMinIntervalMs = 0;
       const bulkSyncIntervalMs = 60_000;
       let lastAiResult = null;
       let lastAiTargetIssue = null;
@@ -327,6 +328,8 @@
       let lastSupabaseIssue = null;
       let lastBulkSyncAt = 0;
       let restoredFromDb = false;
+      let activeLatestIssue = null;
+      let aiInFlightTarget = null;
 
       function normalizeRecord(raw) {
         const number = Number(raw.number);
@@ -453,8 +456,13 @@
 
         const history = loadPredictionHistory();
         const existingIndex = history.findIndex((entry) => entry.issueNumber === issueNumber);
+        const existing = existingIndex >= 0 ? history[existingIndex] : null;
+        if (existing?.status === "graded") return;
+        if (existing?.source === "groq" && source === "fast") return;
+
         const entry = {
           issueNumber,
+          previousIssueNumber: latestIssue ? String(latestIssue) : null,
           predictedRange: prediction.predictedRange,
           predictedNumber: Number(prediction.predictedNumber),
           topNumbers: Array.isArray(prediction.topNumbers) ? prediction.topNumbers.slice(0, 2) : [],
@@ -466,7 +474,6 @@
           status: "pending",
         };
 
-        if (existingIndex >= 0 && history[existingIndex].status === "graded") return;
         if (existingIndex >= 0) history[existingIndex] = { ...history[existingIndex], ...entry };
         else history.unshift(entry);
 
@@ -526,6 +533,7 @@
               <tr>
                 <td>${escapeHtml(entry.issueNumber)}</td>
                 <td>${escapeHtml(entry.predictedNumber)} ${escapeHtml(entry.predictedRange)}</td>
+                <td>${escapeHtml(entry.source === "groq" ? "Groq" : "Fast")}</td>
                 <td>${escapeHtml(actual)}</td>
                 <td>${escapeHtml(entry.action || "TRACK")}</td>
                 <td>${rangeMark}</td>
@@ -686,14 +694,19 @@
         }
       }
 
-      function shouldAskGroq(records, localPrediction) {
+      function shouldAskGroq(targetIssue) {
         const now = Date.now();
-        return now >= aiCooldownUntil && now - lastAiCallAt >= aiMinIntervalMs;
+        return (
+          targetIssue &&
+          now >= aiCooldownUntil &&
+          aiInFlightTarget !== targetIssue &&
+          lastAiTargetIssue !== targetIssue
+        );
       }
 
       function setAiCooldown(milliseconds) {
         if (!Number.isFinite(milliseconds) || milliseconds <= 0) return;
-        aiCooldownUntil = Date.now() + Math.max(milliseconds, aiMinIntervalMs);
+        aiCooldownUntil = Date.now() + milliseconds;
       }
 
       function decideAction(prediction) {
@@ -1025,28 +1038,33 @@
       async function loadAiPrediction(records) {
         if (!records?.length) return;
 
-        const localPrediction = predictClient(records);
-        if (!shouldAskGroq(records, localPrediction)) {
+        const aiLatestIssue = records[0]?.issueNumber;
+        const aiTargetIssue = nextIssueNumber(aiLatestIssue);
+        if (!shouldAskGroq(aiTargetIssue)) {
           const waitSeconds = Math.max(
-            1,
-            Math.ceil((Math.max(aiCooldownUntil, lastAiCallAt + aiMinIntervalMs) - Date.now()) / 1000)
+            0,
+            Math.ceil((aiCooldownUntil - Date.now()) / 1000)
           );
           document.querySelector("#aiReason").textContent =
-            `Groq cooldown: next AI analysis in ${waitSeconds}s.`;
+            waitSeconds > 0
+              ? `Groq rate-limit cooldown: next AI analysis in ${waitSeconds}s.`
+              : `Groq already analyzed issue ${aiTargetIssue}.`;
           return null;
         }
 
         lastAiCallAt = Date.now();
+        aiInFlightTarget = aiTargetIssue;
 
-        document.querySelector("#aiReason").textContent = "Groq analyzing live pattern...";
+        document.querySelector("#aiReason").textContent =
+          `Groq analyzing 500-record compact summary for issue ${aiTargetIssue}...`;
 
         try {
           const response = await fetch("/api/ai-prediction", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              records: records.slice(0, 50),
-              predictionHistory: loadPredictionHistory().slice(0, 12),
+              records: records.slice(0, 500),
+              predictionHistory: loadPredictionHistory().slice(0, 40),
             }),
           });
           const data = await response.json();
@@ -1060,11 +1078,12 @@
             ? (prediction.reason || data.warning)
             : (data.warning || prediction.reason);
           if (data.source === "groq") {
+            if (aiLatestIssue !== activeLatestIssue) return data;
+            lastAiTargetIssue = aiTargetIssue;
             applyPrimaryPrediction(prediction, data.source, displayReason);
-            rememberPrediction(records[0]?.issueNumber, prediction, data.source);
+            rememberPrediction(aiLatestIssue, prediction, data.source);
             syncSupabase(records, prediction, data.source, { force: true });
             lastAiResult = data;
-            lastAiTargetIssue = nextIssueNumber(records[0]?.issueNumber);
           } else {
             setAiCooldown(Number(data.retryAfterMs) || 60_000);
             document.querySelector("#aiPrediction").textContent = "AI cooldown";
@@ -1077,6 +1096,8 @@
         } catch (error) {
           document.querySelector("#aiReason").textContent = error.message;
           return null;
+        } finally {
+          if (aiInFlightTarget === aiTargetIssue) aiInFlightTarget = null;
         }
       }
 
@@ -1096,7 +1117,7 @@
           document.querySelector("#prediction").textContent =
             `${prediction.predictedRange} (${prediction.rangeLabel})`;
           document.querySelector("#predictionSource").textContent =
-            `${sourceLabel} prediction for the next issue.`;
+            `${sourceLabel} prediction for issue ${lastAiTargetIssue || "next"}.`;
         }
         if (Number.isInteger(Number(prediction.predictedNumber))) {
           document.querySelector("#predictedNumber").textContent = prediction.predictedNumber;
@@ -1120,6 +1141,7 @@
       }
 
       function renderData(data) {
+        activeLatestIssue = data.latestIssue || null;
         const localDecision = decideAction(data.prediction);
         data.prediction.action = localDecision.action;
         const nextIssue = nextIssueNumber(data.latestIssue);
@@ -1159,7 +1181,11 @@
             </div>`
           ))
           .join("");
-        document.querySelector("#analysis").textContent = JSON.stringify(data, null, 2);
+        document.querySelector("#analysis").textContent = JSON.stringify({
+          ...data,
+          records: (data.records || []).slice(0, 40),
+          note: "Browser/Supabase mein 500 records store hain. UI speed ke liye Full Analysis mein latest 40 records dikh rahe hain.",
+        }, null, 2);
         statusEl.textContent = data.warning && data.source !== "browser-live"
           ? `Sample data: ${data.warning}`
           : `Updated ${new Date(data.updatedAt).toLocaleTimeString()} (${data.source})`;

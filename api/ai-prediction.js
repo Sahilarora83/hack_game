@@ -20,7 +20,7 @@ function sanitizeRecords(records) {
       };
     })
     .filter(Boolean)
-    .slice(0, 80);
+    .slice(0, 500);
 }
 
 function sanitizePredictionHistory(history) {
@@ -69,6 +69,16 @@ function buildSummary(records) {
   const recent10 = records.slice(0, 10);
   const recent20 = records.slice(0, 20);
   const recent40 = records.slice(0, 40);
+  const blocks = [50, 100, 200, 500].map((windowSize) => {
+    const slice = records.slice(0, Math.min(windowSize, records.length));
+    const frequency = Object.fromEntries([...Array(10).keys()].map((number) => [number, 0]));
+    const sizeCounts = { Big: 0, Small: 0 };
+    slice.forEach((record) => {
+      frequency[record.number] += 1;
+      sizeCounts[record.size] += 1;
+    });
+    return { window: slice.length, frequency, sizeCounts };
+  });
   const allFrequency = Object.fromEntries([...Array(10).keys()].map((number) => [number, 0]));
   const frequency = Object.fromEntries([...Array(10).keys()].map((number) => [number, 0]));
   const sizeCounts = { Big: 0, Small: 0 };
@@ -101,6 +111,7 @@ function buildSummary(records) {
     recent20SizeCounts: sizeCounts,
     allFrequency,
     allSizeCounts,
+    blockSummaries: blocks,
     currentSizeStreak: latestSize ? `${latestSize} x${sizeStreak}` : "none",
     totalRecordsProvided: records.length,
   };
@@ -216,7 +227,7 @@ module.exports = async function handler(req, res) {
             "confidence ('Low', 'Medium', or 'High'), reason (short Hinglish explanation). " +
             "predictedNumber and topNumbers must belong inside the predictedRange. " +
             "Use recent 10-20 results, frequency, missing numbers, current streak, and Big/Small transitions. " +
-            "Also compare with older records and prior wrong predictions in AccuracyFeedback. " +
+            "Also compare 50/100/200/500 record block summaries and prior wrong predictions in AccuracyFeedback. " +
             "If one side has been over-predicted and recently wrong, reduce its weight. " +
             "If signals conflict, choose Low confidence and explain the conflict. " +
             "Return JSON only.\n\nSummary:\n" +
