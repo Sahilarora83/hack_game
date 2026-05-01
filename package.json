@@ -1,8 +1,8 @@
 {
   "name": "wingo-history-analyzer",
   "version": "1.0.0",
-  "private": true,
   "description": "Public WinGo history statistical analyzer and live console predictor.",
+  "license": "MIT",
   "main": "wingo-analyzer.js",
   "scripts": {
     "start": "node wingo-analyzer.js",
