@@ -13,6 +13,7 @@
  *   WINGO_API_URL=https://example.com/WinGo/WinGo_30S/GetHistoryIssuePage.json
  *   WINGO_POLL_MS=30000
  *   WINGO_TARGET_RECORDS=500
+ *   WINGO_STRATEGY=statistical|apk-random
  */
 
 const fs = require("fs/promises");
@@ -27,6 +28,7 @@ const STORE_FILE = path.join(__dirname, "wingo-history.json");
 const POLL_MS = Number(process.env.WINGO_POLL_MS || 30_000);
 const TARGET_RECORDS = Number(process.env.WINGO_TARGET_RECORDS || 500);
 const RECENT_WINDOW = 20;
+const STRATEGY = (process.env.WINGO_STRATEGY || "statistical").toLowerCase();
 const APP_VERSION = "2026-04-30-live-browser-fallback";
 
 function normalizeRecord(raw) {
@@ -145,6 +147,33 @@ function sizeOf(number) {
   return number >= 5 ? "Big" : "Small";
 }
 
+function getApkStylePeriod(date = new Date()) {
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
+  const totalMinutes = date.getUTCHours() * 60 + date.getUTCMinutes();
+
+  return `${year}${month}${day}1000${10001 + totalMinutes}`;
+}
+
+function apkRandomPrediction(date = new Date()) {
+  const number = Math.floor(Math.random() * 10);
+  const predictedRange = sizeOf(number);
+
+  return {
+    strategy: "apk-random",
+    period: getApkStylePeriod(date),
+    predictedRange,
+    rangeLabel: predictedRange === "Big" ? "5-9" : "0-4",
+    topNumbers: [number],
+    scores: {
+      Big: predictedRange === "Big" ? 1 : 0,
+      Small: predictedRange === "Small" ? 1 : 0,
+    },
+    note: "Matches the decompiled APK behavior: random 0-9, then Big for 5-9 and Small for 0-4.",
+  };
+}
+
 function calculateFrequency(records) {
   const frequency = Object.fromEntries([...Array(10).keys()].map((n) => [n, 0]));
 
@@ -228,6 +257,180 @@ function calculateTransitionProbabilities(records) {
   };
 }
 
+function majoritySize(records, limit = 10) {
+  const counts = { Big: 0, Small: 0 };
+  records.slice(0, limit).forEach((record) => {
+    counts[sizeOf(record.number)] += 1;
+  });
+  return counts.Big >= counts.Small ? "Big" : "Small";
+}
+
+function boostedFeatures(records) {
+  const latest = records[0]?.number ?? 0;
+  const latestSize = sizeOf(latest) === "Big" ? 1 : 0;
+  const streak = detectStreaks(records).sizeStreak || { value: "Small", length: 0 };
+  const ratio5 = calculateBigSmallRatio(records.slice(0, 5)).ratio.Big;
+  const ratio10 = calculateBigSmallRatio(records.slice(0, 10)).ratio.Big;
+  const ratio20 = calculateBigSmallRatio(records.slice(0, 20)).ratio.Big;
+  const transitions = calculateTransitionProbabilities(records).probabilities;
+  const latestTransition = latestSize
+    ? transitions["Big->Big"] - transitions["Big->Small"]
+    : transitions["Small->Big"] - transitions["Small->Small"];
+  const recentNumbers = records.slice(0, 10).map((record) => record.number);
+  const average10 =
+    recentNumbers.reduce((sum, number) => sum + number, 0) / Math.max(recentNumbers.length, 1);
+
+  return [
+    latest / 9,
+    latestSize,
+    Math.min(streak.length, 8) / 8,
+    streak.value === "Big" ? 1 : 0,
+    ratio5,
+    ratio10,
+    ratio20,
+    latestTransition,
+    average10 / 9,
+  ];
+}
+
+function buildBoostedTrainingSet(records, maxRows = 220) {
+  const rows = [];
+  for (let i = 1; i <= Math.min(records.length - 25, maxRows); i += 1) {
+    const past = records.slice(i);
+    if (past.length < 25) continue;
+    rows.push({
+      x: boostedFeatures(past),
+      y: sizeOf(records[i - 1].number) === "Big" ? 1 : -1,
+    });
+  }
+  return rows.reverse();
+}
+
+function trainBoostedModel(rows, rounds = 24, learningRate = 0.18) {
+  if (rows.length < 50) return null;
+  const validationSize = Math.max(12, Math.floor(rows.length * 0.22));
+  const validationRows = rows.slice(-validationSize);
+  const trainingRows = rows.slice(0, -validationSize);
+  if (trainingRows.length < 35) return null;
+
+  const predictions = new Array(trainingRows.length).fill(0);
+  const trees = [];
+  const featureCount = trainingRows[0].x.length;
+  let bestTrees = [];
+  let bestValidationAccuracy = 0;
+  let staleRounds = 0;
+
+  for (let round = 0; round < rounds; round += 1) {
+    const residuals = trainingRows.map((row, index) => row.y - predictions[index]);
+    let best = null;
+
+    for (let feature = 0; feature < featureCount; feature += 1) {
+      const values = [...new Set(trainingRows.map((row) => Number(row.x[feature].toFixed(3))))].sort(
+        (a, b) => a - b
+      );
+      const thresholds =
+        values.length > 12
+          ? values.filter((_, index) => index % Math.ceil(values.length / 12) === 0)
+          : values;
+
+      for (const threshold of thresholds) {
+        for (const polarity of [1, -1]) {
+          let leftSum = 0;
+          let leftCount = 0;
+          let rightSum = 0;
+          let rightCount = 0;
+
+          trainingRows.forEach((row, index) => {
+            const goesLeft = polarity * row.x[feature] <= polarity * threshold;
+            if (goesLeft) {
+              leftSum += residuals[index];
+              leftCount += 1;
+            } else {
+              rightSum += residuals[index];
+              rightCount += 1;
+            }
+          });
+
+          const minLeaf = Math.max(6, Math.floor(trainingRows.length * 0.06));
+          if (leftCount < minLeaf || rightCount < minLeaf) continue;
+          const leftValue = leftSum / leftCount;
+          const rightValue = rightSum / rightCount;
+          let loss = 0;
+          trainingRows.forEach((row, index) => {
+            const goesLeft = polarity * row.x[feature] <= polarity * threshold;
+            const value = goesLeft ? leftValue : rightValue;
+            loss += (residuals[index] - value) ** 2;
+          });
+
+          if (!best || loss < best.loss) {
+            best = { feature, threshold, polarity, leftValue, rightValue, loss };
+          }
+        }
+      }
+    }
+
+    if (!best) break;
+    trees.push(best);
+    trainingRows.forEach((row, index) => {
+      const goesLeft = best.polarity * row.x[best.feature] <= best.polarity * best.threshold;
+      predictions[index] += learningRate * (goesLeft ? best.leftValue : best.rightValue);
+    });
+
+    const validationAccuracy =
+      validationRows.filter((row) => (boostedScore({ trees, learningRate }, row.x) >= 0 ? 1 : -1) === row.y)
+        .length / validationRows.length;
+
+    if (validationAccuracy > bestValidationAccuracy + 0.001) {
+      bestValidationAccuracy = validationAccuracy;
+      bestTrees = trees.slice();
+      staleRounds = 0;
+    } else {
+      staleRounds += 1;
+      if (staleRounds >= 5) break;
+    }
+  }
+
+  const finalTrees = bestTrees.length ? bestTrees : trees.slice(0, 8);
+  return {
+    trees: finalTrees,
+    learningRate,
+    trainingRows: trainingRows.length,
+    validationRows: validationRows.length,
+    validationAccuracy: bestValidationAccuracy,
+  };
+}
+
+function boostedScore(model, features) {
+  if (!model?.trees?.length) return 0;
+  return model.trees.reduce((score, tree) => {
+    const goesLeft = tree.polarity * features[tree.feature] <= tree.polarity * tree.threshold;
+    return score + model.learningRate * (goesLeft ? tree.leftValue : tree.rightValue);
+  }, 0);
+}
+
+function xgboostPrediction(records) {
+  const rows = buildBoostedTrainingSet(records);
+  const model = trainBoostedModel(rows);
+  if (!model) {
+    const predictedRange = majoritySize(records, 10);
+    return {
+      predictedRange,
+      score: predictedRange === "Big" ? 0.1 : -0.1,
+      trainedRows: rows.length,
+      trees: 0,
+    };
+  }
+
+  const score = boostedScore(model, boostedFeatures(records));
+  return {
+    predictedRange: score >= 0 ? "Big" : "Small",
+    score,
+    trainedRows: rows.length,
+    trees: model.trees.length,
+    validationAccuracy: model.validationAccuracy,
+  };
+}
+
 function analyze(records) {
   return {
     totalRecords: records.length,
@@ -239,6 +442,10 @@ function analyze(records) {
 }
 
 function predict(records) {
+  if (STRATEGY === "apk-random") {
+    return apkRandomPrediction();
+  }
+
   const recent = records.slice(0, RECENT_WINDOW);
   const recent10 = records.slice(0, 10);
   const analysis = analyze(records);
@@ -247,6 +454,7 @@ function predict(records) {
   const latestSize = records[0] ? sizeOf(records[0].number) : "Small";
   const transition = analysis.transitions.probabilities;
   const streak = analysis.streaks.sizeStreak;
+  const boosted = xgboostPrediction(records);
 
   let bigScore = recentBigSmall.ratio.Big;
   let smallScore = recentBigSmall.ratio.Small;
@@ -265,6 +473,13 @@ function predict(records) {
     if (streak.value === "Small") bigScore += 0.35;
   }
 
+  const validationEdge = Math.max(0, (boosted.validationAccuracy || 0.5) - 0.5);
+  const boostedWeight = Math.min(0.85, Math.max(0.15, Math.abs(boosted.score))) *
+    Math.min(1, boosted.trainedRows / 100) *
+    Math.min(1, validationEdge * 6);
+  if (boosted.predictedRange === "Big") bigScore += boostedWeight;
+  else smallScore += boostedWeight;
+
   const predictedRange = bigScore >= smallScore ? "Big" : "Small";
   const rangeNumbers = predictedRange === "Big" ? [5, 6, 7, 8, 9] : [0, 1, 2, 3, 4];
 
@@ -281,12 +496,20 @@ function predict(records) {
     .map((item) => item.number);
 
   return {
+    strategy: "statistical+xgboost_boosted",
     predictedRange,
     rangeLabel: predictedRange === "Big" ? "5-9" : "0-4",
     topNumbers,
     scores: {
       Big: Number(bigScore.toFixed(3)),
       Small: Number(smallScore.toFixed(3)),
+      xgboost: {
+        predictedRange: boosted.predictedRange,
+        score: Number(boosted.score.toFixed(3)),
+        trainedRows: boosted.trainedRows,
+        trees: boosted.trees,
+        validationAccuracy: Number((boosted.validationAccuracy || 0).toFixed(3)),
+      },
     },
   };
 }
@@ -309,6 +532,10 @@ function printReport(records) {
     `Next Prediction: ${prediction.predictedRange} (${prediction.rangeLabel}), ` +
       `likely numbers: ${prediction.topNumbers.join(", ")}`
   );
+  if (prediction.period) {
+    console.log(`APK-style period: ${prediction.period}`);
+  }
+  console.log(`Strategy mode: ${prediction.strategy}`);
   console.log("Reminder: statistical analysis only; not a guaranteed prediction.\n");
 }
 
@@ -355,6 +582,7 @@ if (require.main === module) {
 module.exports = {
   APP_VERSION,
   analyze,
+  apkRandomPrediction,
   buildInitialDataset,
   calculateBigSmallRatio,
   calculateFrequency,
@@ -363,6 +591,8 @@ module.exports = {
   extractRecords,
   fetchDataset,
   fetchHistoryPage,
+  getApkStylePeriod,
+  xgboostPrediction,
   mergeRecords,
   normalizeRecord,
   predict,

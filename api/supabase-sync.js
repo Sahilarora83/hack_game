@@ -76,7 +76,7 @@ function normalizePrediction(prediction) {
     action: ["SKIP", "WATCH", "STRONG", "TRACK"].includes(prediction.action)
       ? prediction.action
       : "WATCH",
-    source: ["local", "groq", "local-fallback"].includes(prediction.source)
+    source: ["local", "groq", "gemini", "gemini+groq", "groq+gemini", "local-fallback"].includes(prediction.source)
       ? prediction.source
       : "local",
     reason: prediction.reason || null,
