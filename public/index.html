@@ -371,9 +371,9 @@
           <div id="buyReason" class="reason">Real money ke liye guaranteed signal nahi hai.</div>
         </article>
         <article class="card">
-          <div class="label">Groq AI Prediction</div>
+          <div class="label">AI Prediction</div>
           <div id="aiPrediction" class="value">-</div>
-          <div id="aiReason" class="reason">Groq optimized: cache + throttling enabled.</div>
+          <div id="aiReason" class="reason">Gemini + Groq optimized: cache + throttling enabled.</div>
         </article>
         <article class="card">
           <div class="label">APK Algo Result</div>
@@ -422,7 +422,7 @@
               <tr>
                 <th>Total Results</th>
                 <th>Fast Range</th>
-                <th>Groq Range</th>
+                <th>AI Range</th>
                 <th>WATCH</th>
                 <th>STRONG</th>
                 <th>SKIP</th>
@@ -607,7 +607,7 @@
       }
 
       function validTrackedHistory(history = loadPredictionHistory()) {
-        return history.filter((entry) => ["fast", "groq"].includes(entry.source));
+        return history.filter((entry) => ["fast", "groq", "gemini", "gemini+groq", "groq+gemini"].includes(entry.source));
       }
 
       function normalizeDbPrediction(row) {
@@ -623,7 +623,7 @@
             : [predictedNumber],
           confidence: row.confidence || "Low",
           action: row.action || "TRACK",
-          source: row.source === "groq" ? "groq" : "fast",
+          source: ["groq", "gemini", "gemini+groq", "groq+gemini"].includes(row.source) ? row.source : "fast",
           reason: row.reason || "Restored from Supabase.",
           createdAt: row.created_at || new Date().toISOString(),
           status: "pending",
@@ -671,7 +671,7 @@
         if (!prediction?.predictedRange || !Number.isInteger(Number(prediction.predictedNumber))) {
           return;
         }
-        if (!["fast", "groq"].includes(source)) return;
+        if (!["fast", "groq", "gemini", "gemini+groq", "groq+gemini"].includes(source)) return;
 
         const history = loadPredictionHistory();
         const existingIndex = history.findIndex((entry) => entry.issueNumber === issueNumber);
@@ -732,7 +732,7 @@
           ? `${Math.round((rangeCorrect / total) * 100)}% range`
           : "Waiting...";
         document.querySelector("#accuracyDetail").textContent = total
-          ? `Checked ${total} fast/Groq predictions. Exact number accuracy: ${Math.round((numberCorrect / total) * 100)}%. SKIP rows shown, accuracy me count nahi hoti.`
+          ? `Checked ${total} fast/AI predictions. Exact number accuracy: ${Math.round((numberCorrect / total) * 100)}%. SKIP rows shown, accuracy me count nahi hoti.`
           : "Next result aate hi prediction auto-check hogi.";
 
         document.querySelector("#predictionHistory").innerHTML = tracked
@@ -757,7 +757,7 @@
               <tr>
                 <td>${escapeHtml(entry.issueNumber)}</td>
                 <td>${escapeHtml(entry.predictedNumber)} ${escapeHtml(entry.predictedRange)}</td>
-                <td>${escapeHtml(entry.source === "groq" ? "Groq" : "Fast")}</td>
+                <td>${escapeHtml(entry.source === "fast" ? "Fast" : entry.source.replaceAll("+", " + "))}</td>
                 <td>${escapeHtml(actual)}</td>
                 <td>${escapeHtml(entry.action || "TRACK")}</td>
                 <td>${rangeMark}</td>
@@ -773,7 +773,8 @@
       }
 
       function sourceAccuracy(entries, source) {
-        const rows = entries.filter((entry) => entry.source === source && entry.action !== "SKIP");
+        const sourceList = Array.isArray(source) ? source : [source];
+        const rows = entries.filter((entry) => sourceList.includes(entry.source) && entry.action !== "SKIP");
         const checked = rows.length;
         const correct = rows.filter((entry) => entry.rangeCorrect).length;
         return checked ? `${Math.round((correct / checked) * 100)}%/${checked}` : "-";
@@ -798,7 +799,7 @@
           <tr>
             <td>${escapeHtml(records.length)}</td>
             <td>${escapeHtml(sourceAccuracy(graded, "fast"))}</td>
-            <td>${escapeHtml(sourceAccuracy(graded, "groq"))}</td>
+            <td>${escapeHtml(sourceAccuracy(graded, ["groq", "gemini", "gemini+groq", "groq+gemini"]))}</td>
             <td>${escapeHtml(actionAccuracy(nonSkip, "WATCH"))}</td>
             <td>${escapeHtml(actionAccuracy(nonSkip, "STRONG"))}</td>
             <td>${escapeHtml(actionAccuracy(graded, "SKIP"))}</td>
@@ -1767,8 +1768,8 @@
           );
           document.querySelector("#aiReason").textContent =
             waitSeconds > 0
-              ? `Groq rate-limit cooldown: next AI analysis in ${waitSeconds}s.`
-              : `Groq already analyzed issue ${aiTargetIssue}.`;
+              ? `AI rate-limit cooldown: next analysis in ${waitSeconds}s.`
+              : `AI already analyzed issue ${aiTargetIssue}.`;
           return null;
         }
 
@@ -1776,7 +1777,7 @@
         aiInFlightTarget = aiTargetIssue;
 
         document.querySelector("#aiReason").textContent =
-          `Groq analyzing 500-record compact summary for issue ${aiTargetIssue}...`;
+          `Gemini + Groq analyzing 500-record compact summary for issue ${aiTargetIssue}...`;
 
         try {
           const response = await fetch("/api/ai-prediction", {
@@ -1794,10 +1795,11 @@
           }
 
           const prediction = data.prediction || {};
-          const displayReason = data.source === "groq"
+          const hasAiProvider = ["groq", "gemini", "groq+gemini", "gemini+groq"].includes(data.source);
+          const displayReason = hasAiProvider
             ? (prediction.reason || data.warning)
             : (data.warning || prediction.reason);
-          if (data.source === "groq") {
+          if (hasAiProvider) {
             if (aiLatestIssue !== activeLatestIssue) return data;
             lastAiTargetIssue = aiTargetIssue;
             applyPrimaryPrediction(prediction, data.source, displayReason);
@@ -1808,9 +1810,9 @@
             setAiCooldown(Number(data.retryAfterMs) || 60_000);
             document.querySelector("#aiPrediction").textContent = "AI cooldown";
             document.querySelector("#aiReason").textContent =
-              displayReason || "Groq limit hit. Local standby active.";
+              displayReason || "AI provider limit hit. Local standby active.";
             document.querySelector("#reason").textContent =
-              "Groq cooldown active hai; next tracked prediction AI se aayegi.";
+              "AI cooldown active hai; next tracked prediction AI se aayegi.";
           }
           return data;
         } catch (error) {
@@ -1822,7 +1824,13 @@
       }
 
       function applyPrimaryPrediction(prediction, source, reason) {
-        const sourceLabel = source === "groq" ? "Groq AI" : "Local fallback";
+        const sourceLabel = source?.includes("gemini") && source?.includes("groq")
+          ? "Gemini + Groq AI"
+          : source === "gemini"
+            ? "Gemini AI"
+            : source === "groq"
+              ? "Groq AI"
+              : "Local fallback";
         const decision = decideAction({ ...prediction, reason });
         prediction.action = decision.action;
         const locked = lastAiTargetIssue ? loadLockedPredictions()[lastAiTargetIssue] : null;
@@ -1877,7 +1885,7 @@
           document.querySelector("#prediction").textContent =
             `${data.prediction.predictedRange} (${data.prediction.rangeLabel})`;
           document.querySelector("#predictionSource").textContent =
-            `Locked fast signal for next issue ${nextIssue}. Groq background me verify karega.`;
+            `Locked fast signal for next issue ${nextIssue}. Gemini/Groq background me verify karega.`;
           document.querySelector("#predictedNumber").textContent =
             data.prediction.predictedNumber ?? data.prediction.topNumbers[0] ?? "-";
           document.querySelector("#numbers").textContent =
@@ -1896,7 +1904,7 @@
           document.querySelector("#reason").textContent = data.prediction.reason || "-";
           document.querySelector("#action").textContent = localDecision.action;
           document.querySelector("#actionReason").textContent =
-            `${localDecision.reason} Fast signal hai; Groq/API limit ke time ye instant rahega.`;
+            `${localDecision.reason} Fast signal hai; AI/API limit ke time ye instant rahega.`;
           const buyDecision = decideBuy(data.prediction, localDecision);
           document.querySelector("#buyDecision").textContent = buyDecision.label;
           document.querySelector("#buyReason").textContent = buyDecision.reason;

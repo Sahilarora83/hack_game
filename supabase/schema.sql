@@ -27,7 +27,7 @@ create table if not exists public.wingo_predictions (
   top_numbers smallint[] not null default '{}',
   confidence text not null default 'Low' check (confidence in ('Low', 'Medium', 'High')),
   action text not null default 'WATCH' check (action in ('SKIP', 'WATCH', 'STRONG', 'TRACK')),
-  source text not null default 'local' check (source in ('local', 'groq', 'local-fallback')),
+  source text not null default 'local' check (source in ('local', 'groq', 'gemini', 'gemini+groq', 'groq+gemini', 'local-fallback')),
   reason text,
   model text,
   input_summary jsonb,
