@@ -130,6 +130,91 @@
         background: #111827;
       }
 
+      .apk-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 20;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        padding: 18px;
+        background: rgba(15, 23, 42, 0.58);
+      }
+
+      .apk-overlay.open {
+        display: flex;
+      }
+
+      .apk-modal {
+        width: min(100%, 300px);
+        background: rgba(0, 0, 0, 0.92);
+        border: 2px solid #22c55e;
+        border-radius: 8px;
+        box-shadow: 0 18px 60px rgba(15, 23, 42, 0.34);
+        color: #f8fafc;
+        padding: 18px;
+        text-align: center;
+      }
+
+      .apk-modal-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        color: #22c55e;
+        font-weight: 800;
+        letter-spacing: 0;
+      }
+
+      .apk-close {
+        width: 32px;
+        height: 32px;
+        padding: 0;
+        border-radius: 6px;
+        background: #111827;
+        color: #22c55e;
+      }
+
+      .apk-loader {
+        width: 52px;
+        height: 52px;
+        margin: 18px auto 10px;
+        border: 4px solid #1f2937;
+        border-top-color: #22c55e;
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+      }
+
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      .apk-result-circle {
+        width: 92px;
+        height: 92px;
+        margin: 16px auto 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border: 3px solid #22c55e;
+        border-radius: 50%;
+        color: #22c55e;
+        font-size: 18px;
+        font-weight: 800;
+      }
+
+      .apk-period {
+        padding: 9px;
+        border: 1px solid #334155;
+        border-radius: 8px;
+        background: #111827;
+        color: #22c55e;
+        font-size: 13px;
+        overflow-wrap: anywhere;
+      }
+
       .live-dot {
         display: inline-block;
         width: 8px;
@@ -235,7 +320,7 @@
       <div class="actions">
         <button id="refresh">Refresh</button>
         <button id="syncDb" type="button">Sync DB</button>
-        <button id="apkStrategy" class="apk-button" type="button">APK Algo</button>
+        <button id="apkStrategy" class="apk-button" type="button">Accurate</button>
         <button id="restoreHistory" class="secondary-button" type="button">Restore DB History</button>
         <button id="clearHistory" class="secondary-button" type="button">Clear Local History</button>
         <span id="status" class="muted">Loading...</span><span class="live-dot"></span>
@@ -375,10 +460,30 @@
       </section>
     </main>
 
+    <div id="apkOverlay" class="apk-overlay" aria-hidden="true">
+      <div class="apk-modal" role="dialog" aria-modal="true" aria-labelledby="apkModalTitle">
+        <div class="apk-modal-header">
+          <span id="apkModalTitle">JAI CLUB NUMBER AI</span>
+          <button id="apkClose" class="apk-close" type="button" aria-label="Close">X</button>
+        </div>
+        <div id="apkLoading">
+          <div class="apk-loader"></div>
+          <div class="reason">Analyzing current period...</div>
+        </div>
+        <div id="apkResultArea" hidden>
+          <div id="apkModalResult" class="apk-result-circle">-</div>
+          <div id="apkModalPeriod" class="apk-period">Period: -</div>
+          <div id="apkModalNote" class="reason">Locked until next period.</div>
+        </div>
+      </div>
+    </div>
+
     <script>
       const refreshButton = document.querySelector("#refresh");
       const syncDbButton = document.querySelector("#syncDb");
       const apkStrategyButton = document.querySelector("#apkStrategy");
+      const apkOverlay = document.querySelector("#apkOverlay");
+      const apkCloseButton = document.querySelector("#apkClose");
       const restoreHistoryButton = document.querySelector("#restoreHistory");
       const clearHistoryButton = document.querySelector("#clearHistory");
       const statusEl = document.querySelector("#status");
@@ -390,6 +495,7 @@
       const storageKey = "wingo-browser-history-v1";
       const predictionStorageKey = "wingo-prediction-history-v1";
       const lockedPredictionStorageKey = "wingo-locked-predictions-v1";
+      const apkPredictionStorageKey = "wingo-apk-algo-locks-v1";
       const aiMinIntervalMs = 5_000;
       const bulkSyncIntervalMs = 60_000;
       let lastAiResult = null;
@@ -993,14 +1099,73 @@
         return `${year}${month}${day}1000${10001 + totalMinutes}`;
       }
 
-      function runApkAlgo() {
+      function loadApkLocks() {
+        try {
+          const stored = JSON.parse(localStorage.getItem(apkPredictionStorageKey) || "{}");
+          return stored && typeof stored === "object" ? stored : {};
+        } catch {
+          return {};
+        }
+      }
+
+      function saveApkLocks(locks) {
+        const entries = Object.entries(locks)
+          .sort((a, b) => BigInt(b[0]) > BigInt(a[0]) ? 1 : -1)
+          .slice(0, 30);
+        localStorage.setItem(apkPredictionStorageKey, JSON.stringify(Object.fromEntries(entries)));
+      }
+
+      function getLockedApkPrediction() {
+        const period = getApkStylePeriod();
+        const locks = loadApkLocks();
+        if (locks[period]) return locks[period];
+
         const number = Math.floor(Math.random() * 10);
         const predictedRange = sizeOf(number);
+        const prediction = {
+          period,
+          number,
+          predictedRange,
+          createdAt: new Date().toISOString(),
+        };
+        locks[period] = prediction;
+        saveApkLocks(locks);
+        return prediction;
+      }
+
+      function showApkPopup(prediction, wasLocked) {
+        const color = prediction.predictedRange === "Big" ? "#22c55e" : "#ef4444";
+        document.querySelector("#apkLoading").hidden = false;
+        document.querySelector("#apkResultArea").hidden = true;
+        apkOverlay.classList.add("open");
+        apkOverlay.setAttribute("aria-hidden", "false");
+
+        window.setTimeout(() => {
+          const modalResult = document.querySelector("#apkModalResult");
+          modalResult.textContent = `${prediction.predictedRange} ${prediction.number}`;
+          modalResult.style.borderColor = color;
+          modalResult.style.color = color;
+          document.querySelector("#apkModalPeriod").textContent = `Period: ${prediction.period}`;
+          document.querySelector("#apkModalNote").textContent = wasLocked
+            ? "Same period ka locked result. Next period me naya output aayega."
+            : "New period result locked. Baar baar click karne par ye change nahi hoga.";
+          document.querySelector("#apkLoading").hidden = true;
+          document.querySelector("#apkResultArea").hidden = false;
+        }, 900);
+      }
+
+      function runApkAlgo() {
         const period = getApkStylePeriod();
-        document.querySelector("#apkPrediction").textContent = `${predictedRange} ${number}`;
+        const wasLocked = Boolean(loadApkLocks()[period]);
+        const prediction = getLockedApkPrediction();
+        document.querySelector("#apkPrediction").textContent =
+          `${prediction.predictedRange} ${prediction.number}`;
         document.querySelector("#apkReason").textContent =
-          `APK-style random output for period ${period}. 0-4 Small, 5-9 Big.`;
-        statusEl.textContent = `APK Algo generated ${predictedRange} ${number}`;
+          `Period ${prediction.period} ke liye locked output. 0-4 Small, 5-9 Big.`;
+        statusEl.textContent = wasLocked
+          ? `Accurate result already locked for ${prediction.period}`
+          : `Accurate result locked for ${prediction.period}`;
+        showApkPopup(prediction, wasLocked);
       }
 
       function frequency(records) {
@@ -1669,6 +1834,10 @@
       refreshButton.addEventListener("click", loadPrediction);
       syncDbButton.addEventListener("click", syncAllToSupabase);
       apkStrategyButton.addEventListener("click", runApkAlgo);
+      apkCloseButton.addEventListener("click", () => {
+        apkOverlay.classList.remove("open");
+        apkOverlay.setAttribute("aria-hidden", "true");
+      });
       restoreHistoryButton.addEventListener("click", () => restoreHistoryFromSupabase({ force: true }));
       clearHistoryButton.addEventListener("click", () => {
         const ok = confirm(
