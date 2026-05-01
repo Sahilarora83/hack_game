@@ -248,6 +248,11 @@
           <div id="nextIssue" class="reason">Next issue: -</div>
         </article>
         <article class="card">
+          <div class="label">Round Timer</div>
+          <div id="countdown" class="value">--s</div>
+          <div id="lockStatus" class="reason">Prediction lock waiting...</div>
+        </article>
+        <article class="card">
           <div class="label">Likely Numbers</div>
           <div id="numbers" class="value">-</div>
         </article>
@@ -301,13 +306,35 @@
             <thead>
               <tr>
                 <th>Strategy</th>
-                <th>Recent</th>
-                <th>Full</th>
+                <th>30</th>
+                <th>60</th>
+                <th>120</th>
+                <th>All</th>
                 <th>Checks</th>
                 <th>Signal</th>
               </tr>
             </thead>
             <tbody id="strategyPerformance"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="card" style="margin-top: 14px">
+        <div class="label">Supabase Analytics</div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Total Results</th>
+                <th>Fast Range</th>
+                <th>Groq Range</th>
+                <th>WATCH</th>
+                <th>STRONG</th>
+                <th>SKIP</th>
+                <th>Exact</th>
+              </tr>
+            </thead>
+            <tbody id="supabaseAnalytics"></tbody>
           </table>
         </div>
       </section>
@@ -351,7 +378,8 @@
       const pollMs = 1_000;
       const storageKey = "wingo-browser-history-v1";
       const predictionStorageKey = "wingo-prediction-history-v1";
-      const aiMinIntervalMs = 0;
+      const lockedPredictionStorageKey = "wingo-locked-predictions-v1";
+      const aiMinIntervalMs = 5_000;
       const bulkSyncIntervalMs = 60_000;
       let lastAiResult = null;
       let lastAiTargetIssue = null;
@@ -363,6 +391,48 @@
       let restoredFromDb = false;
       let activeLatestIssue = null;
       let aiInFlightTarget = null;
+
+      function loadLockedPredictions() {
+        try {
+          const stored = JSON.parse(localStorage.getItem(lockedPredictionStorageKey) || "{}");
+          return stored && typeof stored === "object" ? stored : {};
+        } catch {
+          return {};
+        }
+      }
+
+      function saveLockedPredictions(locked) {
+        const entries = Object.entries(locked)
+          .sort((a, b) => BigInt(b[0]) > BigInt(a[0]) ? 1 : -1)
+          .slice(0, 60);
+        localStorage.setItem(lockedPredictionStorageKey, JSON.stringify(Object.fromEntries(entries)));
+      }
+
+      function lockPredictionForIssue(issueNumber, prediction, source = "fast") {
+        if (!issueNumber || issueNumber === "-" || !prediction?.predictedRange) return prediction;
+        const locked = loadLockedPredictions();
+        if (locked[issueNumber]) return locked[issueNumber];
+
+        locked[issueNumber] = {
+          ...prediction,
+          source,
+          lockedAt: new Date().toISOString(),
+        };
+        saveLockedPredictions(locked);
+        return locked[issueNumber];
+      }
+
+      function updateCountdown() {
+        const remaining = 30 - (Math.floor(Date.now() / 1000) % 30);
+        document.querySelector("#countdown").textContent = `${remaining}s`;
+        const locks = loadLockedPredictions();
+        const latestIssue = activeLatestIssue || loadStoredRecords()[0]?.issueNumber;
+        const nextIssue = nextIssueNumber(latestIssue);
+        const locked = locks[nextIssue];
+        document.querySelector("#lockStatus").textContent = locked
+          ? `Locked for next issue ${nextIssue}`
+          : "Next result aate hi lock banega.";
+      }
 
       function normalizeRecord(raw) {
         const number = Number(raw.number);
@@ -416,7 +486,7 @@
       }
 
       function savePredictionHistory(history) {
-        localStorage.setItem(predictionStorageKey, JSON.stringify(history.slice(0, 200)));
+        localStorage.setItem(predictionStorageKey, JSON.stringify(history.slice(0, 1000)));
       }
 
       function validTrackedHistory(history = loadPredictionHistory()) {
@@ -490,7 +560,7 @@
         const existingIndex = history.findIndex((entry) => entry.issueNumber === issueNumber);
         const existing = existingIndex >= 0 ? history[existingIndex] : null;
         if (existing?.status === "graded") return;
-        if (existing?.source === "groq" && source === "fast") return;
+        if (existing) return;
 
         const entry = {
           issueNumber,
@@ -581,6 +651,45 @@
           .join("");
       }
 
+      function percentLabel(value, checked = 0) {
+        return checked ? `${Math.round(value * 100)}%` : "-";
+      }
+
+      function sourceAccuracy(entries, source) {
+        const rows = entries.filter((entry) => entry.source === source && entry.action !== "SKIP");
+        const checked = rows.length;
+        const correct = rows.filter((entry) => entry.rangeCorrect).length;
+        return checked ? `${Math.round((correct / checked) * 100)}%/${checked}` : "-";
+      }
+
+      function actionAccuracy(entries, action) {
+        const rows = entries.filter((entry) => entry.action === action);
+        if (action === "SKIP") return String(rows.length);
+        const checked = rows.length;
+        const correct = rows.filter((entry) => entry.rangeCorrect).length;
+        return checked ? `${Math.round((correct / checked) * 100)}%/${checked}` : "-";
+      }
+
+      function renderSupabaseAnalytics(records = loadStoredRecords()) {
+        const graded = validTrackedHistory()
+          .filter((entry) => entry.status === "graded");
+        const nonSkip = graded.filter((entry) => entry.action !== "SKIP");
+        const exactCorrect = nonSkip.filter((entry) => entry.numberCorrect).length;
+        const exact = nonSkip.length ? `${Math.round((exactCorrect / nonSkip.length) * 100)}%` : "-";
+
+        document.querySelector("#supabaseAnalytics").innerHTML = `
+          <tr>
+            <td>${escapeHtml(records.length)}</td>
+            <td>${escapeHtml(sourceAccuracy(graded, "fast"))}</td>
+            <td>${escapeHtml(sourceAccuracy(graded, "groq"))}</td>
+            <td>${escapeHtml(actionAccuracy(nonSkip, "WATCH"))}</td>
+            <td>${escapeHtml(actionAccuracy(nonSkip, "STRONG"))}</td>
+            <td>${escapeHtml(actionAccuracy(graded, "SKIP"))}</td>
+            <td>${escapeHtml(exact)}</td>
+          </tr>
+        `;
+      }
+
       function trackedOutcomeStats(history = loadPredictionHistory(), limit = 12) {
         const graded = validTrackedHistory(history)
           .filter((entry) => entry.status === "graded" && entry.action !== "SKIP")
@@ -610,22 +719,24 @@
 
         document.querySelector("#strategyPerformance").innerHTML = alternatives
           .map((score) => {
-            const recent = score.recentChecked
-              ? `${Math.round(score.recentAccuracy * 100)}%`
-              : "-";
-            const full = score.checked ? `${Math.round(score.accuracy * 100)}%` : "-";
+            const w30 = score.windows?.w30 || {};
+            const w60 = score.windows?.w60 || {};
+            const w120 = score.windows?.w120 || {};
+            const all = score.windows?.all || {};
             const signal =
-              score.recentChecked >= 35 && score.recentAccuracy >= 0.58
+              w60.checked >= 35 && w60.accuracy >= 0.58
                 ? '<span class="ok">Strong</span>'
-                : score.recentChecked >= 35 && score.recentAccuracy >= 0.54
+                : w60.checked >= 35 && w60.accuracy >= 0.52
                   ? "Watch"
                   : '<span class="muted">Weak</span>';
             return `
               <tr>
                 <td><span class="strategy-badge">${escapeHtml(score.strategy.replaceAll("_", " "))}</span></td>
-                <td>${recent}</td>
-                <td>${full}</td>
-                <td>${escapeHtml(score.recentChecked || 0)}/${escapeHtml(score.checked || 0)}</td>
+                <td>${escapeHtml(percentLabel(w30.accuracy, w30.checked))}</td>
+                <td>${escapeHtml(percentLabel(w60.accuracy, w60.checked))}</td>
+                <td>${escapeHtml(percentLabel(w120.accuracy, w120.checked))}</td>
+                <td>${escapeHtml(percentLabel(all.accuracy, all.checked))}</td>
+                <td>${escapeHtml(w60.checked || 0)}/${escapeHtml(all.checked || 0)}</td>
                 <td>${signal}</td>
               </tr>
             `;
@@ -788,6 +899,7 @@
         return (
           targetIssue &&
           now >= aiCooldownUntil &&
+          now - lastAiCallAt >= aiMinIntervalMs &&
           aiInFlightTarget !== targetIssue &&
           lastAiTargetIssue !== targetIssue
         );
@@ -805,26 +917,24 @@
         const recentAccuracy = Number(prediction?.scores?.recentAccuracy || 0);
         const voteMargin = Number(prediction?.scores?.voteMargin || 0);
 
-        if (outcomes.wrongStreak >= 3) {
+        if (outcomes.wrongStreak >= 5) {
           return {
             action: "SKIP",
             reason: `Last ${outcomes.wrongStreak} tracked range signals wrong aaye. Cooldown active hai, skip karo.`,
           };
         }
 
-        if (prediction?.confidence === "Low" || conflict) {
+        if (prediction?.confidence === "Low" && voteMargin < 0.06 && recentAccuracy < 0.49) {
           return {
             action: "SKIP",
-            reason: conflict
-              ? "Signals conflict/weak hain, is round ko skip karo."
-              : "Confidence low hai, is round ko skip karo.",
+            reason: "Pattern unstable hai: low confidence + low vote margin. Is round ko skip karo.",
           };
         }
 
-        if (prediction?.confidence === "Medium" && recentAccuracy < 0.54) {
+        if (conflict && prediction?.confidence === "Low" && voteMargin < 0.12) {
           return {
             action: "SKIP",
-            reason: "Medium label hai, par recent strategy backtest weak hai. Skip safer hai.",
+            reason: "Signals conflict/weak hain, is round ko skip karo.",
           };
         }
 
@@ -1007,12 +1117,21 @@
           "minority_10",
           "majority_20",
           "minority_20",
+          "majority_50",
+          "minority_50",
           "streak_adaptive",
+          "streak_break_2",
           "streak_break_3",
+          "streak_break_4",
+          "streak_break_5",
+          "streak_follow_2",
           "streak_follow_3",
+          "streak_follow_4",
+          "streak_follow_5",
           "transition",
           "pattern_2",
           "pattern_3",
+          "pattern_4",
           "cycle_2",
           "cycle_3",
         ];
@@ -1031,16 +1150,36 @@
         if (strategy === "minority_10") return oppositeSize(majorityRange(records, 10));
         if (strategy === "majority_20") return majorityRange(records, 20);
         if (strategy === "minority_20") return oppositeSize(majorityRange(records, 20));
+        if (strategy === "majority_50") return majorityRange(records, 50);
+        if (strategy === "minority_50") return oppositeSize(majorityRange(records, 50));
         if (strategy === "streak_adaptive") {
           if (streak.length >= 4) return oppositeSize(streak.value);
           if (streak.length >= 2) return streak.value;
           return majorityRange(records, 10);
         }
+        if (strategy === "streak_break_2") {
+          return streak.length >= 2 ? oppositeSize(streak.value) : majorityRange(records, 10);
+        }
         if (strategy === "streak_break_3") {
           return streak.length >= 3 ? oppositeSize(streak.value) : majorityRange(records, 10);
         }
+        if (strategy === "streak_break_4") {
+          return streak.length >= 4 ? oppositeSize(streak.value) : majorityRange(records, 10);
+        }
+        if (strategy === "streak_break_5") {
+          return streak.length >= 5 ? oppositeSize(streak.value) : majorityRange(records, 10);
+        }
+        if (strategy === "streak_follow_2") {
+          return streak.length >= 2 ? streak.value : majorityRange(records, 5);
+        }
         if (strategy === "streak_follow_3") {
           return streak.length >= 3 ? streak.value : majorityRange(records, 5);
+        }
+        if (strategy === "streak_follow_4") {
+          return streak.length >= 4 ? streak.value : majorityRange(records, 5);
+        }
+        if (strategy === "streak_follow_5") {
+          return streak.length >= 5 ? streak.value : majorityRange(records, 5);
         }
         if (strategy === "transition") {
           if (latestSize === "Big") {
@@ -1050,20 +1189,47 @@
         }
         if (strategy === "pattern_2") return patternRange(records, 2);
         if (strategy === "pattern_3") return patternRange(records, 3);
+        if (strategy === "pattern_4") return patternRange(records, 4);
         if (strategy === "cycle_2") return records[1] ? sizeOf(records[1].number) : majorityRange(records, 10);
         if (strategy === "cycle_3") return records[2] ? sizeOf(records[2].number) : majorityRange(records, 10);
         return majorityRange(records, 10);
       }
 
+      function evaluateStrategy(records, strategy, maxChecks) {
+        const checks = Math.min(records.length - 25, maxChecks);
+        let checked = 0;
+        let correct = 0;
+
+        for (let i = 1; i <= checks; i += 1) {
+          const past = records.slice(i);
+          if (past.length < 20) continue;
+          const predicted = strategyPrediction(past, strategy);
+          const actual = sizeOf(records[i - 1].number);
+          checked += 1;
+          if (predicted === actual) correct += 1;
+        }
+
+        return {
+          checked,
+          correct,
+          accuracy: checked ? correct / checked : 0,
+        };
+      }
+
       function backtestStrategies(records) {
-        const maxChecks = Math.min(records.length - 25, 180);
         const scores = strategyNames().map((strategy) => {
           let checked = 0;
           let correct = 0;
           let recentChecked = 0;
           let recentCorrect = 0;
+          const windows = {
+            w30: evaluateStrategy(records, strategy, 30),
+            w60: evaluateStrategy(records, strategy, 60),
+            w120: evaluateStrategy(records, strategy, 120),
+            all: evaluateStrategy(records, strategy, 300),
+          };
 
-          for (let i = 1; i <= maxChecks; i += 1) {
+          for (let i = 1; i <= Math.min(records.length - 25, 180); i += 1) {
             const past = records.slice(i);
             if (past.length < 20) continue;
             const predicted = strategyPrediction(past, strategy);
@@ -1078,17 +1244,19 @@
 
           return {
             strategy,
+            windows,
             checked,
             correct,
-            accuracy: checked ? correct / checked : 0,
-            recentChecked,
-            recentCorrect,
-            recentAccuracy: recentChecked ? recentCorrect / recentChecked : 0,
+            accuracy: windows.all.accuracy || (checked ? correct / checked : 0),
+            recentChecked: windows.w60.checked || recentChecked,
+            recentCorrect: windows.w60.correct || recentCorrect,
+            recentAccuracy: windows.w60.accuracy || (recentChecked ? recentCorrect / recentChecked : 0),
           };
         });
 
         return scores.sort(
           (a, b) =>
+            (b.windows?.w30?.accuracy || 0) - (a.windows?.w30?.accuracy || 0) ||
             b.recentAccuracy - a.recentAccuracy ||
             b.accuracy - a.accuracy ||
             b.recentChecked - a.recentChecked
@@ -1344,6 +1512,7 @@
         const sourceLabel = source === "groq" ? "Groq AI" : "Local fallback";
         const decision = decideAction({ ...prediction, reason });
         prediction.action = decision.action;
+        const locked = lastAiTargetIssue ? loadLockedPredictions()[lastAiTargetIssue] : null;
 
         document.querySelector("#aiPrediction").textContent =
           prediction.predictedRange && prediction.rangeLabel
@@ -1352,29 +1521,33 @@
         document.querySelector("#aiReason").textContent =
           `${sourceLabel}: ${reason || "No reason returned."}`;
 
-        if (prediction.predictedRange && prediction.rangeLabel) {
+        if (!locked && prediction.predictedRange && prediction.rangeLabel) {
           document.querySelector("#prediction").textContent =
             `${prediction.predictedRange} (${prediction.rangeLabel})`;
           document.querySelector("#predictionSource").textContent =
             `${sourceLabel} prediction for issue ${lastAiTargetIssue || "next"}.`;
         }
-        if (Number.isInteger(Number(prediction.predictedNumber))) {
+        if (!locked && Number.isInteger(Number(prediction.predictedNumber))) {
           document.querySelector("#predictedNumber").textContent = prediction.predictedNumber;
         }
-        if (Array.isArray(prediction.topNumbers) && prediction.topNumbers.length) {
+        if (!locked && Array.isArray(prediction.topNumbers) && prediction.topNumbers.length) {
           document.querySelector("#numbers").textContent = prediction.topNumbers
             .slice(0, 2)
             .join(", ");
         }
-        if (prediction.confidence) {
+        if (!locked && prediction.confidence) {
           document.querySelector("#confidence").textContent = prediction.confidence;
         }
-        document.querySelector("#action").textContent = decision.action;
-        document.querySelector("#actionReason").textContent = decision.reason;
+        if (!locked) {
+          document.querySelector("#action").textContent = decision.action;
+          document.querySelector("#actionReason").textContent = decision.reason;
+        }
         const buyDecision = decideBuy(prediction, decision);
-        document.querySelector("#buyDecision").textContent = buyDecision.label;
-        document.querySelector("#buyReason").textContent = buyDecision.reason;
-        if (reason) {
+        if (!locked) {
+          document.querySelector("#buyDecision").textContent = buyDecision.label;
+          document.querySelector("#buyReason").textContent = buyDecision.reason;
+        }
+        if (!locked && reason) {
           document.querySelector("#reason").textContent = `${sourceLabel}: ${reason}`;
         }
         renderStrategyPerformance(prediction);
@@ -1382,15 +1555,16 @@
 
       function renderData(data) {
         activeLatestIssue = data.latestIssue || null;
+        const nextIssue = nextIssueNumber(data.latestIssue);
+        data.prediction = lockPredictionForIssue(nextIssue, data.prediction, "fast");
         const localDecision = decideAction(data.prediction);
         data.prediction.action = localDecision.action;
-        const nextIssue = nextIssueNumber(data.latestIssue);
         const hasFreshAiPrediction = lastAiResult && lastAiTargetIssue === nextIssue;
         if (!hasFreshAiPrediction) {
           document.querySelector("#prediction").textContent =
             `${data.prediction.predictedRange} (${data.prediction.rangeLabel})`;
           document.querySelector("#predictionSource").textContent =
-            "Instant fast signal. Groq background me verify karega.";
+            `Locked fast signal for next issue ${nextIssue}. Groq background me verify karega.`;
           document.querySelector("#predictedNumber").textContent =
             data.prediction.predictedNumber ?? data.prediction.topNumbers[0] ?? "-";
           document.querySelector("#numbers").textContent =
@@ -1433,6 +1607,7 @@
 
         gradePredictionHistory(data.records || []);
         rememberPrediction(data.latestIssue, data.prediction, "fast");
+        renderSupabaseAnalytics(data.records || []);
         syncRealtimeToSupabase(data);
         loadAiPrediction(data.records || data.prediction.recentResults);
       }
@@ -1475,8 +1650,11 @@
         statusEl.textContent = "Local prediction history cleared. Restore DB History se wapas la sakte ho.";
       });
       renderPredictionHistory();
+      renderSupabaseAnalytics();
+      updateCountdown();
       restoreHistoryFromSupabase();
       loadPrediction();
+      setInterval(updateCountdown, 1_000);
       setInterval(loadPrediction, pollMs);
     </script>
   </body>
