@@ -257,6 +257,150 @@ function calculateTransitionProbabilities(records) {
   };
 }
 
+function majoritySize(records, limit = 10) {
+  const counts = { Big: 0, Small: 0 };
+  records.slice(0, limit).forEach((record) => {
+    counts[sizeOf(record.number)] += 1;
+  });
+  return counts.Big >= counts.Small ? "Big" : "Small";
+}
+
+function boostedFeatures(records) {
+  const latest = records[0]?.number ?? 0;
+  const latestSize = sizeOf(latest) === "Big" ? 1 : 0;
+  const streak = detectStreaks(records).sizeStreak || { value: "Small", length: 0 };
+  const ratio5 = calculateBigSmallRatio(records.slice(0, 5)).ratio.Big;
+  const ratio10 = calculateBigSmallRatio(records.slice(0, 10)).ratio.Big;
+  const ratio20 = calculateBigSmallRatio(records.slice(0, 20)).ratio.Big;
+  const transitions = calculateTransitionProbabilities(records).probabilities;
+  const latestTransition = latestSize
+    ? transitions["Big->Big"] - transitions["Big->Small"]
+    : transitions["Small->Big"] - transitions["Small->Small"];
+  const recentNumbers = records.slice(0, 10).map((record) => record.number);
+  const average10 =
+    recentNumbers.reduce((sum, number) => sum + number, 0) / Math.max(recentNumbers.length, 1);
+
+  return [
+    latest / 9,
+    latestSize,
+    Math.min(streak.length, 8) / 8,
+    streak.value === "Big" ? 1 : 0,
+    ratio5,
+    ratio10,
+    ratio20,
+    latestTransition,
+    average10 / 9,
+  ];
+}
+
+function buildBoostedTrainingSet(records, maxRows = 220) {
+  const rows = [];
+  for (let i = 1; i <= Math.min(records.length - 25, maxRows); i += 1) {
+    const past = records.slice(i);
+    if (past.length < 25) continue;
+    rows.push({
+      x: boostedFeatures(past),
+      y: sizeOf(records[i - 1].number) === "Big" ? 1 : -1,
+    });
+  }
+  return rows.reverse();
+}
+
+function trainBoostedModel(rows, rounds = 34, learningRate = 0.28) {
+  if (rows.length < 30) return null;
+  const predictions = new Array(rows.length).fill(0);
+  const trees = [];
+  const featureCount = rows[0].x.length;
+
+  for (let round = 0; round < rounds; round += 1) {
+    const residuals = rows.map((row, index) => row.y - predictions[index]);
+    let best = null;
+
+    for (let feature = 0; feature < featureCount; feature += 1) {
+      const values = [...new Set(rows.map((row) => Number(row.x[feature].toFixed(3))))].sort(
+        (a, b) => a - b
+      );
+      const thresholds =
+        values.length > 12
+          ? values.filter((_, index) => index % Math.ceil(values.length / 12) === 0)
+          : values;
+
+      for (const threshold of thresholds) {
+        for (const polarity of [1, -1]) {
+          let leftSum = 0;
+          let leftCount = 0;
+          let rightSum = 0;
+          let rightCount = 0;
+
+          rows.forEach((row, index) => {
+            const goesLeft = polarity * row.x[feature] <= polarity * threshold;
+            if (goesLeft) {
+              leftSum += residuals[index];
+              leftCount += 1;
+            } else {
+              rightSum += residuals[index];
+              rightCount += 1;
+            }
+          });
+
+          if (!leftCount || !rightCount) continue;
+          const leftValue = leftSum / leftCount;
+          const rightValue = rightSum / rightCount;
+          let loss = 0;
+          rows.forEach((row, index) => {
+            const goesLeft = polarity * row.x[feature] <= polarity * threshold;
+            const value = goesLeft ? leftValue : rightValue;
+            loss += (residuals[index] - value) ** 2;
+          });
+
+          if (!best || loss < best.loss) {
+            best = { feature, threshold, polarity, leftValue, rightValue, loss };
+          }
+        }
+      }
+    }
+
+    if (!best) break;
+    trees.push(best);
+    rows.forEach((row, index) => {
+      const goesLeft = best.polarity * row.x[best.feature] <= best.polarity * best.threshold;
+      predictions[index] += learningRate * (goesLeft ? best.leftValue : best.rightValue);
+    });
+  }
+
+  return { trees, learningRate };
+}
+
+function boostedScore(model, features) {
+  if (!model?.trees?.length) return 0;
+  return model.trees.reduce((score, tree) => {
+    const goesLeft = tree.polarity * features[tree.feature] <= tree.polarity * tree.threshold;
+    return score + model.learningRate * (goesLeft ? tree.leftValue : tree.rightValue);
+  }, 0);
+}
+
+function xgboostPrediction(records) {
+  const rows = buildBoostedTrainingSet(records);
+  const model = trainBoostedModel(rows);
+  if (!model) {
+    const predictedRange = majoritySize(records, 10);
+    return {
+      predictedRange,
+      score: predictedRange === "Big" ? 0.1 : -0.1,
+      trainedRows: rows.length,
+      trees: 0,
+    };
+  }
+
+  const score = boostedScore(model, boostedFeatures(records));
+  return {
+    predictedRange: score >= 0 ? "Big" : "Small",
+    score,
+    trainedRows: rows.length,
+    trees: model.trees.length,
+  };
+}
+
 function analyze(records) {
   return {
     totalRecords: records.length,
@@ -280,6 +424,7 @@ function predict(records) {
   const latestSize = records[0] ? sizeOf(records[0].number) : "Small";
   const transition = analysis.transitions.probabilities;
   const streak = analysis.streaks.sizeStreak;
+  const boosted = xgboostPrediction(records);
 
   let bigScore = recentBigSmall.ratio.Big;
   let smallScore = recentBigSmall.ratio.Small;
@@ -298,6 +443,11 @@ function predict(records) {
     if (streak.value === "Small") bigScore += 0.35;
   }
 
+  const boostedWeight = Math.min(1.1, Math.max(0.25, Math.abs(boosted.score))) *
+    Math.min(1, boosted.trainedRows / 80);
+  if (boosted.predictedRange === "Big") bigScore += boostedWeight;
+  else smallScore += boostedWeight;
+
   const predictedRange = bigScore >= smallScore ? "Big" : "Small";
   const rangeNumbers = predictedRange === "Big" ? [5, 6, 7, 8, 9] : [0, 1, 2, 3, 4];
 
@@ -314,13 +464,19 @@ function predict(records) {
     .map((item) => item.number);
 
   return {
-    strategy: "statistical",
+    strategy: "statistical+xgboost_boosted",
     predictedRange,
     rangeLabel: predictedRange === "Big" ? "5-9" : "0-4",
     topNumbers,
     scores: {
       Big: Number(bigScore.toFixed(3)),
       Small: Number(smallScore.toFixed(3)),
+      xgboost: {
+        predictedRange: boosted.predictedRange,
+        score: Number(boosted.score.toFixed(3)),
+        trainedRows: boosted.trainedRows,
+        trees: boosted.trees,
+      },
     },
   };
 }
@@ -403,6 +559,7 @@ module.exports = {
   fetchDataset,
   fetchHistoryPage,
   getApkStylePeriod,
+  xgboostPrediction,
   mergeRecords,
   normalizeRecord,
   predict,
