@@ -870,6 +870,52 @@
         return { value: first, length };
       }
 
+      function sizePattern(records, length) {
+        return records.slice(0, length).map((record) => sizeOf(record.number)).join("|");
+      }
+
+      function patternRange(records, length) {
+        if (records.length < length + 8) return majorityRange(records, 10);
+
+        const currentPattern = sizePattern(records, length);
+        const counts = { Big: 0, Small: 0 };
+
+        for (let i = length; i < records.length - length; i += 1) {
+          const historicalPattern = records
+            .slice(i, i + length)
+            .map((record) => sizeOf(record.number))
+            .join("|");
+          const nextHistoricalResult = records[i - 1];
+          if (historicalPattern === currentPattern && nextHistoricalResult) {
+            counts[sizeOf(nextHistoricalResult.number)] += 1;
+          }
+        }
+
+        if (counts.Big + counts.Small < 4) return majorityRange(records, 10);
+        return counts.Big >= counts.Small ? "Big" : "Small";
+      }
+
+      function strategyNames() {
+        return [
+          "follow_latest",
+          "break_latest",
+          "majority_5",
+          "minority_5",
+          "majority_10",
+          "minority_10",
+          "majority_20",
+          "minority_20",
+          "streak_adaptive",
+          "streak_break_3",
+          "streak_follow_3",
+          "transition",
+          "pattern_2",
+          "pattern_3",
+          "cycle_2",
+          "cycle_3",
+        ];
+      }
+
       function strategyPrediction(records, strategy) {
         const latestSize = records[0] ? sizeOf(records[0].number) : "Small";
         const streak = currentSizeStreak(records);
@@ -878,13 +924,21 @@
         if (strategy === "follow_latest") return latestSize;
         if (strategy === "break_latest") return oppositeSize(latestSize);
         if (strategy === "majority_5") return majorityRange(records, 5);
+        if (strategy === "minority_5") return oppositeSize(majorityRange(records, 5));
         if (strategy === "majority_10") return majorityRange(records, 10);
         if (strategy === "minority_10") return oppositeSize(majorityRange(records, 10));
         if (strategy === "majority_20") return majorityRange(records, 20);
+        if (strategy === "minority_20") return oppositeSize(majorityRange(records, 20));
         if (strategy === "streak_adaptive") {
           if (streak.length >= 4) return oppositeSize(streak.value);
           if (streak.length >= 2) return streak.value;
           return majorityRange(records, 10);
+        }
+        if (strategy === "streak_break_3") {
+          return streak.length >= 3 ? oppositeSize(streak.value) : majorityRange(records, 10);
+        }
+        if (strategy === "streak_follow_3") {
+          return streak.length >= 3 ? streak.value : majorityRange(records, 5);
         }
         if (strategy === "transition") {
           if (latestSize === "Big") {
@@ -892,24 +946,20 @@
           }
           return transitions["Small->Small"] >= transitions["Small->Big"] ? "Small" : "Big";
         }
+        if (strategy === "pattern_2") return patternRange(records, 2);
+        if (strategy === "pattern_3") return patternRange(records, 3);
+        if (strategy === "cycle_2") return records[1] ? sizeOf(records[1].number) : majorityRange(records, 10);
+        if (strategy === "cycle_3") return records[2] ? sizeOf(records[2].number) : majorityRange(records, 10);
         return majorityRange(records, 10);
       }
 
       function backtestStrategies(records) {
-        const strategies = [
-          "follow_latest",
-          "break_latest",
-          "majority_5",
-          "majority_10",
-          "minority_10",
-          "majority_20",
-          "streak_adaptive",
-          "transition",
-        ];
-        const maxChecks = Math.min(records.length - 21, 120);
-        const scores = strategies.map((strategy) => {
+        const maxChecks = Math.min(records.length - 25, 180);
+        const scores = strategyNames().map((strategy) => {
           let checked = 0;
           let correct = 0;
+          let recentChecked = 0;
+          let recentCorrect = 0;
 
           for (let i = 1; i <= maxChecks; i += 1) {
             const past = records.slice(i);
@@ -918,6 +968,10 @@
             const actual = sizeOf(records[i - 1].number);
             checked += 1;
             if (predicted === actual) correct += 1;
+            if (i <= 70) {
+              recentChecked += 1;
+              if (predicted === actual) recentCorrect += 1;
+            }
           }
 
           return {
@@ -925,56 +979,132 @@
             checked,
             correct,
             accuracy: checked ? correct / checked : 0,
+            recentChecked,
+            recentCorrect,
+            recentAccuracy: recentChecked ? recentCorrect / recentChecked : 0,
           };
         });
 
-        return scores.sort((a, b) => b.accuracy - a.accuracy || b.checked - a.checked);
+        return scores.sort(
+          (a, b) =>
+            b.recentAccuracy - a.recentAccuracy ||
+            b.accuracy - a.accuracy ||
+            b.recentChecked - a.recentChecked
+        );
+      }
+
+      function selectRangePrediction(records, backtest) {
+        const fallback = backtest[0] || {
+          strategy: "majority_10",
+          accuracy: 0,
+          checked: 0,
+          recentAccuracy: 0,
+          recentChecked: 0,
+        };
+        const eligible = backtest.filter(
+          (score) => score.recentChecked >= 35 && score.recentAccuracy >= 0.52
+        );
+        const candidates = (eligible.length ? eligible : backtest).slice(0, 6);
+        const votes = { Big: 0, Small: 0 };
+
+        for (const candidate of candidates) {
+          const predicted = strategyPrediction(records, candidate.strategy);
+          const recentEdge = Math.max(0.01, candidate.recentAccuracy - 0.5);
+          const fullEdge = Math.max(0, candidate.accuracy - 0.5);
+          const weight =
+            recentEdge * Math.max(candidate.recentChecked, 1) +
+            fullEdge * Math.min(candidate.checked, 120) * 0.35;
+          votes[predicted] += weight;
+        }
+
+        if (votes.Big === 0 && votes.Small === 0) {
+          votes[strategyPrediction(records, fallback.strategy)] = 1;
+        }
+
+        const predictedRange = votes.Big >= votes.Small ? "Big" : "Small";
+        const totalVote = votes.Big + votes.Small || 1;
+        const margin = Math.abs(votes.Big - votes.Small) / totalVote;
+        const top = candidates[0] || fallback;
+        const confidence =
+          records.length < 60 || top.recentChecked < 35
+            ? "Low"
+            : top.recentAccuracy >= 0.59 && margin >= 0.32
+              ? "High"
+              : top.recentAccuracy >= 0.54 && margin >= 0.18
+                ? "Medium"
+                : "Low";
+
+        return {
+          predictedRange,
+          confidence,
+          best: top,
+          margin,
+          candidates,
+          reason: top.recentChecked
+            ? `Adaptive ensemble: ${top.strategy.replaceAll("_", " ")} recent backtest ${Math.round(
+                top.recentAccuracy * 100
+              )}% over ${top.recentChecked}; vote margin ${Math.round(margin * 100)}%.`
+            : "Adaptive ensemble needs more local history.",
+        };
+      }
+
+      function rankNumbers(records, predictedRange, analysis) {
+        const rangeNumbers = predictedRange === "Big" ? [5, 6, 7, 8, 9] : [0, 1, 2, 3, 4];
+        const recent10 = records.slice(0, 10);
+        const recent30 = records.slice(0, 30);
+        const recent10Frequency = frequency(recent10);
+        const recent30Frequency = frequency(recent30);
+        const latestNumber = records[0]?.number;
+        const latestSize = records[0] ? sizeOf(records[0].number) : null;
+        const afterNumberCounts = Object.fromEntries(rangeNumbers.map((number) => [number, 0]));
+        const afterSizeCounts = Object.fromEntries(rangeNumbers.map((number) => [number, 0]));
+
+        for (let i = 1; i < records.length; i += 1) {
+          const previousContext = records[i];
+          const nextActual = records[i - 1];
+          if (!rangeNumbers.includes(nextActual.number)) continue;
+          if (previousContext.number === latestNumber) {
+            afterNumberCounts[nextActual.number] += 1;
+          }
+          if (latestSize && sizeOf(previousContext.number) === latestSize) {
+            afterSizeCounts[nextActual.number] += 1;
+          }
+        }
+
+        return rangeNumbers
+          .map((number) => {
+            const missingBonus = recent10.some((record) => record.number === number) ? 0 : 0.9;
+            return {
+              number,
+              score:
+                (recent10Frequency[number] || 0) * 1.4 +
+                (recent30Frequency[number] || 0) * 0.9 +
+                (afterNumberCounts[number] || 0) * 2.3 +
+                (afterSizeCounts[number] || 0) * 0.45 +
+                ((analysis.frequency[number] || 0) / Math.max(records.length, 1)) * 2 +
+                missingBonus,
+            };
+          })
+          .sort((a, b) => b.score - a.score || a.number - b.number)
+          .slice(0, 2)
+          .map((item) => item.number);
       }
 
       function predictClient(records) {
-        const recent = records.slice(0, recentWindow);
         const recent10 = records.slice(0, 10);
         const analysis = analyzeClient(records);
-        const recentFrequency = frequency(recent);
         const backtest = backtestStrategies(records);
-        const best = backtest[0] || { strategy: "majority_10", accuracy: 0, checked: 0 };
-        const predictedRange = strategyPrediction(records, best.strategy);
-        const confidence = records.length < 30
-          ? "Low"
-          : best.checked >= 40 && best.accuracy >= 0.58
-            ? "High"
-            : best.checked >= 30 && best.accuracy >= 0.53
-              ? "Medium"
-              : "Low";
-        const rangeNumbers = predictedRange === "Big" ? [5, 6, 7, 8, 9] : [0, 1, 2, 3, 4];
-        const recentMissingBonus = new Map(
-          rangeNumbers.map((number) => [
-            number,
-            recent10.some((record) => record.number === number) ? 0 : 1.25,
-          ])
-        );
-        const topNumbers = rangeNumbers
-          .map((number) => ({
-            number,
-            score:
-              (recentFrequency[number] || 0) * 2 +
-              (analysis.frequency[number] || 0) / Math.max(records.length, 1) +
-              recentMissingBonus.get(number),
-          }))
-          .sort((a, b) => b.score - a.score)
-          .slice(0, 2)
-          .map((item) => item.number);
-        const reason = best.checked
-          ? `Fast adaptive signal: ${best.strategy.replaceAll("_", " ")} backtest ${Math.round(best.accuracy * 100)}% range over ${best.checked} checks.`
-          : "Fast adaptive signal needs more local history.";
+        const selected = selectRangePrediction(records, backtest);
+        const predictedRange = selected.predictedRange;
+        const topNumbers = rankNumbers(records, predictedRange, analysis);
 
         return {
           predictedRange,
           rangeLabel: predictedRange === "Big" ? "5-9" : "0-4",
           predictedNumber: topNumbers[0],
           topNumbers,
-          confidence,
-          reason,
+          confidence: selected.confidence,
+          reason: selected.reason,
           recentResults: recent10.map((record) => ({
             issueNumber: record.issueNumber,
             number: record.number,
@@ -982,10 +1112,13 @@
             color: record.color,
           })),
           scores: {
-            bestStrategy: best.strategy,
-            backtestAccuracy: Number((best.accuracy || 0).toFixed(3)),
-            checked: best.checked,
-            alternatives: backtest.slice(0, 3),
+            bestStrategy: selected.best.strategy,
+            backtestAccuracy: Number((selected.best.accuracy || 0).toFixed(3)),
+            recentAccuracy: Number((selected.best.recentAccuracy || 0).toFixed(3)),
+            checked: selected.best.checked,
+            recentChecked: selected.best.recentChecked,
+            voteMargin: Number(selected.margin.toFixed(3)),
+            alternatives: selected.candidates.slice(0, 3),
           },
         };
       }
