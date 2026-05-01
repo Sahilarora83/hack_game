@@ -1342,18 +1342,26 @@
         return rows.reverse();
       }
 
-      function trainBoostedModel(rows, rounds = 34, learningRate = 0.28) {
-        if (rows.length < 30) return null;
-        const predictions = new Array(rows.length).fill(0);
+      function trainBoostedModel(rows, rounds = 24, learningRate = 0.18) {
+        if (rows.length < 50) return null;
+        const validationSize = Math.max(12, Math.floor(rows.length * 0.22));
+        const validationRows = rows.slice(-validationSize);
+        const trainingRows = rows.slice(0, -validationSize);
+        if (trainingRows.length < 35) return null;
+
+        const predictions = new Array(trainingRows.length).fill(0);
         const trees = [];
-        const featureCount = rows[0].x.length;
+        const featureCount = trainingRows[0].x.length;
+        let bestTrees = [];
+        let bestValidationAccuracy = 0;
+        let staleRounds = 0;
 
         for (let round = 0; round < rounds; round += 1) {
-          const residuals = rows.map((row, index) => row.y - predictions[index]);
+          const residuals = trainingRows.map((row, index) => row.y - predictions[index]);
           let best = null;
 
           for (let feature = 0; feature < featureCount; feature += 1) {
-            const values = [...new Set(rows.map((row) => Number(row.x[feature].toFixed(3))))].sort((a, b) => a - b);
+            const values = [...new Set(trainingRows.map((row) => Number(row.x[feature].toFixed(3))))].sort((a, b) => a - b);
             const thresholds = values.length > 12
               ? values.filter((_, index) => index % Math.ceil(values.length / 12) === 0)
               : values;
@@ -1365,7 +1373,7 @@
                 let rightSum = 0;
                 let rightCount = 0;
 
-                rows.forEach((row, index) => {
+                trainingRows.forEach((row, index) => {
                   const goesLeft = polarity * row.x[feature] <= polarity * threshold;
                   if (goesLeft) {
                     leftSum += residuals[index];
@@ -1376,11 +1384,12 @@
                   }
                 });
 
-                if (!leftCount || !rightCount) continue;
+                const minLeaf = Math.max(6, Math.floor(trainingRows.length * 0.06));
+                if (leftCount < minLeaf || rightCount < minLeaf) continue;
                 const leftValue = leftSum / leftCount;
                 const rightValue = rightSum / rightCount;
                 let loss = 0;
-                rows.forEach((row, index) => {
+                trainingRows.forEach((row, index) => {
                   const goesLeft = polarity * row.x[feature] <= polarity * threshold;
                   const value = goesLeft ? leftValue : rightValue;
                   loss += (residuals[index] - value) ** 2;
@@ -1395,13 +1404,33 @@
 
           if (!best) break;
           trees.push(best);
-          rows.forEach((row, index) => {
+          trainingRows.forEach((row, index) => {
             const goesLeft = best.polarity * row.x[best.feature] <= best.polarity * best.threshold;
             predictions[index] += learningRate * (goesLeft ? best.leftValue : best.rightValue);
           });
+
+          const validationAccuracy =
+            validationRows.filter((row) => (boostedScore({ trees, learningRate }, row.x) >= 0 ? 1 : -1) === row.y)
+              .length / validationRows.length;
+
+          if (validationAccuracy > bestValidationAccuracy + 0.001) {
+            bestValidationAccuracy = validationAccuracy;
+            bestTrees = trees.slice();
+            staleRounds = 0;
+          } else {
+            staleRounds += 1;
+            if (staleRounds >= 5) break;
+          }
         }
 
-        return { trees, learningRate };
+        const finalTrees = bestTrees.length ? bestTrees : trees.slice(0, 8);
+        return {
+          trees: finalTrees,
+          learningRate,
+          trainingRows: trainingRows.length,
+          validationRows: validationRows.length,
+          validationAccuracy: bestValidationAccuracy,
+        };
       }
 
       function boostedScore(model, features) {

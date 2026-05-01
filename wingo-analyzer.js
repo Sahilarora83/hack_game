@@ -306,18 +306,26 @@ function buildBoostedTrainingSet(records, maxRows = 220) {
   return rows.reverse();
 }
 
-function trainBoostedModel(rows, rounds = 34, learningRate = 0.28) {
-  if (rows.length < 30) return null;
-  const predictions = new Array(rows.length).fill(0);
+function trainBoostedModel(rows, rounds = 24, learningRate = 0.18) {
+  if (rows.length < 50) return null;
+  const validationSize = Math.max(12, Math.floor(rows.length * 0.22));
+  const validationRows = rows.slice(-validationSize);
+  const trainingRows = rows.slice(0, -validationSize);
+  if (trainingRows.length < 35) return null;
+
+  const predictions = new Array(trainingRows.length).fill(0);
   const trees = [];
-  const featureCount = rows[0].x.length;
+  const featureCount = trainingRows[0].x.length;
+  let bestTrees = [];
+  let bestValidationAccuracy = 0;
+  let staleRounds = 0;
 
   for (let round = 0; round < rounds; round += 1) {
-    const residuals = rows.map((row, index) => row.y - predictions[index]);
+    const residuals = trainingRows.map((row, index) => row.y - predictions[index]);
     let best = null;
 
     for (let feature = 0; feature < featureCount; feature += 1) {
-      const values = [...new Set(rows.map((row) => Number(row.x[feature].toFixed(3))))].sort(
+      const values = [...new Set(trainingRows.map((row) => Number(row.x[feature].toFixed(3))))].sort(
         (a, b) => a - b
       );
       const thresholds =
@@ -332,7 +340,7 @@ function trainBoostedModel(rows, rounds = 34, learningRate = 0.28) {
           let rightSum = 0;
           let rightCount = 0;
 
-          rows.forEach((row, index) => {
+          trainingRows.forEach((row, index) => {
             const goesLeft = polarity * row.x[feature] <= polarity * threshold;
             if (goesLeft) {
               leftSum += residuals[index];
@@ -343,11 +351,12 @@ function trainBoostedModel(rows, rounds = 34, learningRate = 0.28) {
             }
           });
 
-          if (!leftCount || !rightCount) continue;
+          const minLeaf = Math.max(6, Math.floor(trainingRows.length * 0.06));
+          if (leftCount < minLeaf || rightCount < minLeaf) continue;
           const leftValue = leftSum / leftCount;
           const rightValue = rightSum / rightCount;
           let loss = 0;
-          rows.forEach((row, index) => {
+          trainingRows.forEach((row, index) => {
             const goesLeft = polarity * row.x[feature] <= polarity * threshold;
             const value = goesLeft ? leftValue : rightValue;
             loss += (residuals[index] - value) ** 2;
@@ -362,13 +371,33 @@ function trainBoostedModel(rows, rounds = 34, learningRate = 0.28) {
 
     if (!best) break;
     trees.push(best);
-    rows.forEach((row, index) => {
+    trainingRows.forEach((row, index) => {
       const goesLeft = best.polarity * row.x[best.feature] <= best.polarity * best.threshold;
       predictions[index] += learningRate * (goesLeft ? best.leftValue : best.rightValue);
     });
+
+    const validationAccuracy =
+      validationRows.filter((row) => (boostedScore({ trees, learningRate }, row.x) >= 0 ? 1 : -1) === row.y)
+        .length / validationRows.length;
+
+    if (validationAccuracy > bestValidationAccuracy + 0.001) {
+      bestValidationAccuracy = validationAccuracy;
+      bestTrees = trees.slice();
+      staleRounds = 0;
+    } else {
+      staleRounds += 1;
+      if (staleRounds >= 5) break;
+    }
   }
 
-  return { trees, learningRate };
+  const finalTrees = bestTrees.length ? bestTrees : trees.slice(0, 8);
+  return {
+    trees: finalTrees,
+    learningRate,
+    trainingRows: trainingRows.length,
+    validationRows: validationRows.length,
+    validationAccuracy: bestValidationAccuracy,
+  };
 }
 
 function boostedScore(model, features) {
@@ -398,6 +427,7 @@ function xgboostPrediction(records) {
     score,
     trainedRows: rows.length,
     trees: model.trees.length,
+    validationAccuracy: model.validationAccuracy,
   };
 }
 
@@ -443,8 +473,10 @@ function predict(records) {
     if (streak.value === "Small") bigScore += 0.35;
   }
 
-  const boostedWeight = Math.min(1.1, Math.max(0.25, Math.abs(boosted.score))) *
-    Math.min(1, boosted.trainedRows / 80);
+  const validationEdge = Math.max(0, (boosted.validationAccuracy || 0.5) - 0.5);
+  const boostedWeight = Math.min(0.85, Math.max(0.15, Math.abs(boosted.score))) *
+    Math.min(1, boosted.trainedRows / 100) *
+    Math.min(1, validationEdge * 6);
   if (boosted.predictedRange === "Big") bigScore += boostedWeight;
   else smallScore += boostedWeight;
 
@@ -476,6 +508,7 @@ function predict(records) {
         score: Number(boosted.score.toFixed(3)),
         trainedRows: boosted.trainedRows,
         trees: boosted.trees,
+        validationAccuracy: Number((boosted.validationAccuracy || 0).toFixed(3)),
       },
     },
   };
