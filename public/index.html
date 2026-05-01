@@ -387,7 +387,7 @@
       }
 
       function validTrackedHistory(history = loadPredictionHistory()) {
-        return history.filter((entry) => ["fast", "groq"].includes(entry.source) && entry.action !== "SKIP");
+        return history.filter((entry) => ["fast", "groq"].includes(entry.source));
       }
 
       function normalizeDbPrediction(row) {
@@ -452,7 +452,6 @@
           return;
         }
         if (!["fast", "groq"].includes(source)) return;
-        if (prediction.action === "SKIP") return;
 
         const history = loadPredictionHistory();
         const existingIndex = history.findIndex((entry) => entry.issueNumber === issueNumber);
@@ -504,7 +503,7 @@
 
       function renderPredictionHistory(history = loadPredictionHistory()) {
         const tracked = validTrackedHistory(history);
-        const graded = tracked.filter((entry) => entry.status === "graded");
+        const graded = tracked.filter((entry) => entry.status === "graded" && entry.action !== "SKIP");
         const total = graded.length;
         const rangeCorrect = graded.filter((entry) => entry.rangeCorrect).length;
         const numberCorrect = graded.filter((entry) => entry.numberCorrect).length;
@@ -513,19 +512,24 @@
           ? `${Math.round((rangeCorrect / total) * 100)}% range`
           : "Waiting...";
         document.querySelector("#accuracyDetail").textContent = total
-          ? `Checked ${total} fast/Groq predictions. Exact number accuracy: ${Math.round((numberCorrect / total) * 100)}%.`
+          ? `Checked ${total} fast/Groq predictions. Exact number accuracy: ${Math.round((numberCorrect / total) * 100)}%. SKIP rows shown, accuracy me count nahi hoti.`
           : "Next result aate hi prediction auto-check hogi.";
 
         document.querySelector("#predictionHistory").innerHTML = tracked
-          .slice(0, 12)
+          .slice(0, 20)
           .map((entry) => {
             const actual = entry.status === "graded"
               ? `${entry.actualNumber} ${entry.actualRange}`
               : "Pending";
-            const rangeMark = entry.status === "graded"
+            const isSkip = entry.action === "SKIP";
+            const rangeMark = isSkip
+              ? '<span class="muted">Skipped</span>'
+              : entry.status === "graded"
               ? `<span class="${entry.rangeCorrect ? "ok" : "bad"}">${entry.rangeCorrect ? "OK" : "Wrong"}</span>`
               : "-";
-            const numberMark = entry.status === "graded"
+            const numberMark = isSkip
+              ? "-"
+              : entry.status === "graded"
               ? `<span class="${entry.numberCorrect ? "ok" : "bad"}">${entry.numberCorrect ? "OK" : "Wrong"}</span>`
               : "-";
 
